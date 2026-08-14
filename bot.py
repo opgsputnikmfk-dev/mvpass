@@ -8,45 +8,39 @@ app = Flask(__name__)
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 active_chats = set()
 
-def get_data(symbol, interval="1h", limit=168):
+def get_data(symbol, interval="15m", limit=50):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         with urllib.request.urlopen(url, context=context, timeout=5) as r: 
             return json.loads(r.read())
     except: return []
 
-def calculate_backtest():
-    t_all, w_all = 0, 0
-    details = ""
-    for symbol in SYMBOLS:
-        candles = get_data(symbol, "1h", 168)
-        if len(candles) < 20: continue
-        t, w = 0, 0
-        for i in range(20, len(candles) - 4):
-            prices = [float(c[4]) for c in candles[i-20:i+1]]
-            sma = sum(prices) / 20
-            stdev = (sum((x - sma)**2 for x in prices) / 20)**0.5
-            upper, lower = sma + (3.0 * stdev), sma - (3.0 * stdev)
-            
-            curr_p = prices[-1]
-            if curr_p < lower or curr_p > upper:
-                t += 1
-                next_p = float(candles[i+4][4])
-                if (curr_p < lower and next_p > curr_p) or (curr_p > upper and next_p < curr_p):
-                    w += 1
-        t_all += t
-        w_all += w
-        if t > 0:
-            details += f"🔹 {symbol.replace('USDT','')}: {w}/{t} ({(w/t)*100:.1f}%)\n"
-        else:
-            details += f"🔹 {symbol.replace('USDT','')}: 0 сделок\n"
+def evaluate_pattern(candles):
+    """Паттерн пробоя локального экстремума с подтверждением объема"""
+    if len(candles) < 30: return None
     
-    wr = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 СТАТИСТИКА ЗА 7 ДНЕЙ\n\n"
-              f"{details}\n"
-              f"📈 ВСЕГО СИГНАЛОВ: {t_all}\n"
-              f"✅ УСПЕШНЫХ: {w_all}\n"
-              f"🏆 WINRATE: {wr:.1f}%")
+    closes = [float(c[4]) for c in candles]
+    volumes = [float(c[5]) for c in candles]
+    highs = [float(c[2]) for c in candles]
+    lows = [float(c[3]) for c in candles]
+    
+    current_close = closes[-1]
+    prev_high = max(highs[-20:-1]) # Локальный максимум за 20 свечей
+    prev_low = min(lows[-20:-1])   # Локальный минимум за 20 свечей
+    
+    avg_vol = sum(volumes[-20:-1]) / 20
+    current_vol = volumes[-1]
+    
+    # Условие объема: объем текущей свечи выше среднего на 30%
+    is_volume_confirmed = current_vol > (avg_vol * 1.3)
+    
+    if is_volume_confirmed:
+        if current_close > prev_high:
+            return "LONG (Пробой вверх)"
+        elif current_close < prev_low:
+            return "SHORT (Пробой вниз)"
+            
+    return None
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -61,30 +55,35 @@ def broadcast(text):
     for chat_id in active_chats:
         send_msg(chat_id, text)
 
-def live_scanner():
-    """Живой сканер: проверяет рынок и шлет реальные сигналы"""
-    print("📡 Живой сканер запущен...")
+def active_scanner():
+    """Активный сканер паттернов на 15m"""
+    print("📡 Активный сканер паттернов запущен...")
+    # Словарь для защиты от спама по одной монете (чтобы не слать сигнал каждый цикл)
+    last_signals = {}
+    
     while True:
         try:
             for symbol in SYMBOLS:
-                candles = get_data(symbol, "1h", 30)
-                if len(candles) < 20: continue
-                prices = [float(c[4]) for c in candles]
-                sma = sum(prices[-20:]) / 20
-                stdev = (sum((x - sma)**2 for x in prices[-20:]) / 20)**0.5
-                upper, lower = sma + (3.0 * stdev), sma - (3.0 * stdev)
+                candles = get_data(symbol, "15m", 50)
+                signal = evaluate_pattern(candles)
                 
-                curr_p = prices[-1]
-                if curr_p < lower:
-                    broadcast(f"🚨 ЖИВОЙ СИГНАЛ (LONG)\nМонета: {symbol.replace('USDT','')}\nЦена отскока: {curr_p}\nУровень нижней границы: {lower:.2f}")
-                elif curr_p > upper:
-                    broadcast(f"🚨 ЖИВОЙ СИГНАЛ (SHORT)\nМонета: {symbol.replace('USDT','')}\nЦена отскока: {curr_p}\nУровень верхней границы: {upper:.2f}")
-                
+                if signal:
+                    # Проверяем, не отправляли ли мы уже этот сигнал недавно
+                    last_time = last_signals.get(symbol, 0)
+                    if time.time() - last_time > 3600: # Пауза 1 час на один символ
+                        last_signals[symbol] = time.time()
+                        curr_price = candles[-1][4]
+                        msg = (f"🔥 АКТИВНЫЙ ПАТТЕРН!\n"
+                               f"Монета: {symbol.replace('USDT','')}\n"
+                               f"Сигнал: {signal}\n"
+                               f"Цена входа: {curr_price}\n"
+                               f"Таймфрейм: 15m")
+                        broadcast(msg)
                 time.sleep(2)
-            time.sleep(1800) # Проверка каждые 30 минут
+            time.sleep(300) # Проверять каждые 5 минут
         except Exception as e:
             print(f"Ошибка сканера: {e}")
-            time.sleep(60)
+            time.sleep(30)
 
 def bot_engine():
     last_update_id = 0
@@ -95,27 +94,16 @@ def bot_engine():
             updates = json.loads(urllib.request.urlopen(url, timeout=35).read().decode()).get("result", [])
             for u in updates:
                 last_update_id = u["update_id"] + 1
-                
-                chat_id, data = None, None
+                chat_id = None
                 if "message" in u and "text" in u["message"]:
                     chat_id = u["message"]["chat"]["id"]
                 elif "callback_query" in u:
                     chat_id = u["callback_query"]["message"]["chat"]["id"]
-                    data = u["callback_query"]["data"]
                 
                 if chat_id:
                     active_chats.add(chat_id)
-                    keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "🔄 Обновить статистику (7 дней)", "callback_data": "REFRESH_STATS"}]
-                        ]
-                    }
-                    if data == "REFRESH_STATS":
-                        send_msg(chat_id, "⏳ Считаю реальные данные за 7 дней...")
-                        stats_text = calculate_backtest()
-                        send_msg(chat_id, stats_text, keyboard)
-                    else:
-                        send_msg(chat_id, "✅ Бот подключен и работает в живом режиме! Как только появится аномалия на монетах, пришлю сигнал сюда. Также можешь запросить статистику:", keyboard)
+                    keyboard = {"inline_keyboard": [[{"text": "📊 Проверить статус бота", "callback_data": "STATUS"}]]}
+                    send_msg(chat_id, "🚀 Бот переведен на активный поиск паттернов (15m)! Сигналы будут поступать регулярно при пробое уровней с объемами.", keyboard)
             
             time.sleep(1)
         except Exception as e:
@@ -123,9 +111,9 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Bot is live 24/7"
+def home(): return "Active Pattern Bot is live"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
-    threading.Thread(target=live_scanner, daemon=True).start()
+    threading.Thread(target=active_scanner, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
