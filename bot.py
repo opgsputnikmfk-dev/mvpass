@@ -1,5 +1,6 @@
 from flask import Flask
 import urllib.request, urllib.parse, json, ssl, time, threading, os
+from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 context = ssl._create_unverified_context()
@@ -36,9 +37,9 @@ def calculate_ema(prices, period):
         ema = (price - ema) * multiplier + ema
     return ema
 
-def calculate_profitable_backtest():
+def calculate_terminal_backtest():
     t_all, w_all = 0, 0
-    details = ""
+    rows = []
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
@@ -69,19 +70,25 @@ def calculate_profitable_backtest():
                     
         t_all += t
         w_all += w
-        sym_name = symbol.replace('USDT', '')
-        if t > 0:
-            wr_sym = (w / t) * 100
-            details += f"• **{sym_name}**: {w}/{t} ({wr_sym:.1f}%)\n"
-        else:
-            details += f"• **{sym_name}**: 0 сделок\n"
+        sym_name = symbol.replace('USDT', '').ljust(5)
+        wr_sym = (w / t * 100) if t > 0 else 0.0
+        rows.append(f"{sym_name} | {str(w).rjust(2)}/{str(t).rjust(3)} | {wr_sym:5.1f}%")
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **СТАТИСТИКА СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
-            f"{details}\n"
-            f"📈 **Всего сделок:** {t_all}\n"
-            f"✅ **Успешных:** {w_all}\n"
-            f"🏆 **WinRate:** {winrate:.1f}%")
+    
+    table_content = "\n".join(rows)
+    report = (
+        "=== SYSTEM BACKTEST REPORT (7D) ===\n"
+        "PAIR  | WIN/TOT | WINRATE\n"
+        "---------------------------------\n"
+        f"{table_content}\n"
+        "---------------------------------\n"
+        f"TOTAL TRADES: {t_all}\n"
+        f"SUCCESSFUL:   {w_all}\n"
+        f"WINRATE:      {winrate:.1f}%\n"
+        f"TIMESTAMP:    {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
+    )
+    return f"```text\n{report}\n```"
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -95,7 +102,7 @@ def broadcast(text):
         send_msg(chat_id, text)
 
 def live_scanner():
-    print("📡 Живой сканер с расчетом рисков запущен...")
+    print("Terminal Scanner Online...")
     last_alerts = {}
     while True:
         try:
@@ -112,7 +119,6 @@ def live_scanner():
                 rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
                 
-                # Расчет ATR за последние 14 баров для динамических стопов
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
@@ -131,29 +137,35 @@ def live_scanner():
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
+                    if now - last_alerts.get(symbol, 0) > 7200:
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
+                        
                         msg = (
-                            f"⚡️ **ТОРГОВЫЙ СИГНАЛ: {sym_name}**\n\n"
-                            f"• Направление: **{signal} (Откат по тренду)**\n"
-                            f"• Таймфрейм: `15m`\n\n"
-                            f"📍 **Точка входа:** `{entry:.4f}`\n"
-                            f"🛑 **Стоп-лосс (SL):** `{sl:.4f}`\n"
-                            f"🎯 **Тейк-профит 1 (TP1):** `{tp1:.4f}`\n"
-                            f"🎯 **Тейк-профит 2 (TP2):** `{tp2:.4f}`\n\n"
-                            f"📊 **Индикаторы:** RSI = `{rsi:.1f}` | ATR = `{atr:.4f}`"
+                            "```text\n"
+                            f"[SIGNAL ALERT] // {sym_name}USDT\n"
+                            "---------------------------------\n"
+                            f"ACTION:     {signal}\n"
+                            f"TIMEFRAME:  15m\n"
+                            f"ENTRY:      {entry:.4f}\n"
+                            f"STOP-LOSS:  {sl:.4f}\n"
+                            f"TAKE-PROFIT 1: {tp1:.4f}\n"
+                            f"TAKE-PROFIT 2: {tp2:.4f}\n"
+                            "---------------------------------\n"
+                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
+                            f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
+                            "```"
                         )
                         broadcast(msg)
                 time.sleep(2)
             time.sleep(300)
         except Exception as e:
-            print(f"Ошибка сканера: {e}")
+            print(f"Scanner error: {e}")
             time.sleep(30)
 
 def bot_engine():
     last_update_id = 0
-    print("🤖 Бот запущен...")
+    print("Terminal Bot Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -168,30 +180,33 @@ def bot_engine():
                     active_chats.add(chat_id)
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "📊 Статистика стратегии (7 дней)", "callback_data": "SHOW_STATS"}]
+                            [{"text": "SYSTEM STATS (7D)", "callback_data": "SHOW_STATS"}]
                         ]
                     }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Считаю статистику...", keyboard)
-                        report = calculate_profitable_backtest()
+                        send_msg(chat_id, "Processing analytics...", keyboard)
+                        report = calculate_terminal_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
                         welcome_text = (
-                            "👋 **Торговый терминал активен**\n\n"
-                            "Бот автоматически отслеживает тренды, считает риски и присылает готовые сигналы в этот чат.\n\n"
-                            "Нажми кнопку ниже для проверки статистики:"
+                            "```text\n"
+                            "TRADING TERMINAL v2.1 ACTIVE\n"
+                            "---------------------------------\n"
+                            "System monitoring 10 crypto assets.\n"
+                            "Use the control panel below.\n"
+                            "```"
                         )
                         send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
         except Exception as e:
-            print(f"Ошибка бота: {e}")
+            print(f"Bot error: {e}")
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Trading Bot Active"
+def home(): return "Terminal Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
     threading.Thread(target=live_scanner, daemon=True).start()
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    app.run(host='0.0.0.0', port=int(os.environ.com.get("PORT", 10000) if hasattr(os, "environ") else 10000))
