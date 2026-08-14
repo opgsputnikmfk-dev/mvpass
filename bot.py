@@ -6,16 +6,15 @@ context = ssl._create_unverified_context()
 app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
+active_chats = set()
 
 def get_data(symbol):
-    # Используем официальный публичный дата-сервер Binance без гео-блокировок
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=15m&limit=672"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, context=context, timeout=10) as r: 
             return json.loads(r.read().decode())
-    except Exception as e:
-        print(f"Ошибка загрузки {symbol}: {e}")
+    except:
         return []
 
 def calculate_active_backtest():
@@ -24,16 +23,13 @@ def calculate_active_backtest():
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
-        if not candles or len(candles) < 30: 
-            details += f"🔹 **{symbol.replace('USDT','')}**: нет данных\n"
-            continue
+        if not candles or len(candles) < 30: continue
         
         try:
             highs = [float(c[2]) for c in candles]
             lows = [float(c[3]) for c in candles]
             closes = [float(c[4]) for c in candles]
-        except Exception as e:
-            print(f"Ошибка парсинга {symbol}: {e}")
+        except:
             continue
         
         t, w = 0, 0
@@ -43,10 +39,8 @@ def calculate_active_backtest():
             curr_p = closes[i]
             
             sig = None
-            if curr_p > prev_high:
-                sig = "LONG"
-            elif curr_p < prev_low:
-                sig = "SHORT"
+            if curr_p > prev_high: sig = "LONG"
+            elif curr_p < prev_low: sig = "SHORT"
                 
             if sig:
                 t += 1
@@ -59,16 +53,16 @@ def calculate_active_backtest():
         sym_name = symbol.replace('USDT', '')
         if t > 0:
             wr_sym = (w / t) * 100
-            details += f"🔹 **{sym_name}**: {w}/{t} сделок ({wr_sym:.1f}%)\n"
+            details += f"• **{sym_name}**: {w}/{t} ({wr_sym:.1f}%)\n"
         else:
-            details += f"🔹 **{sym_name}**: 0 сделок\n"
+            details += f"• **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **АКТИВНЫЙ ИТОГ СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
+    return (f"📊 **СТАТИСТИКА ЗА 7 ДНЕЙ (15m)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
-            f"🏆 **WinRate:** {winrate:.1f}%")
+            f"🏆 **Общий WinRate:** {winrate:.1f}%")
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -77,9 +71,51 @@ def send_msg(chat_id, text, keyboard=None):
     try: urllib.request.urlopen(url, context=context, timeout=5)
     except: pass
 
+def broadcast(text):
+    for chat_id in active_chats:
+        send_msg(chat_id, text)
+
+def live_scanner():
+    """Фоновый сканер: ищет свежие пробои и шлет сигналы"""
+    print("📡 Фоновый сканер запущен...")
+    last_alerts = {}
+    while True:
+        try:
+            for symbol in SYMBOLS:
+                candles = get_data(symbol)
+                if not candles or len(candles) < 25: continue
+                
+                highs = [float(c[2]) for c in candles]
+                lows = [float(c[3]) for c in candles]
+                closes = [float(c[4]) for c in candles]
+                
+                prev_high = max(highs[-21:-1])
+                prev_low = min(lows[-21:-1])
+                curr_p = closes[-1]
+                
+                signal = None
+                if curr_p > prev_high: signal = "LONG (Пробой вверх)"
+                elif curr_p < prev_low: signal = "SHORT (Пробой вниз)"
+                
+                if signal:
+                    now = time.time()
+                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
+                        last_alerts[symbol] = now
+                        msg = (f"🚨 **НОВЫЙ СИГНАЛ**\n\n"
+                               f"• Монета: **{symbol.replace('USDT','')}**\n"
+                               f"• Направление: **{signal}**\n"
+                               f"• Цена: `{curr_p}`\n"
+                               f"• Таймфрейм: 15m")
+                        broadcast(msg)
+                time.sleep(2)
+            time.sleep(300) # Проверка каждые 5 минут
+        except Exception as e:
+            print(f"Ошибка сканера: {e}")
+            time.sleep(30)
+
 def bot_engine():
     last_update_id = 0
-    print("🤖 Бот успешно запущен...")
+    print("🤖 Бот запущен...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -91,21 +127,35 @@ def bot_engine():
                 data = u.get("callback_query", {}).get("data")
                 
                 if chat_id:
-                    keyboard = {"inline_keyboard": [[{"text": "📊 Посмотреть активные сделки (7 дней)", "callback_data": "ACTIVE_STATS"}]]}
-                    if data == "ACTIVE_STATS":
-                        send_msg(chat_id, "⏳ Сканирую 15-минутные графики за 7 дней...")
+                    active_chats.add(chat_id)
+                    keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "📊 Статистика за 7 дней", "callback_data": "SHOW_STATS"}],
+                            [{"text": "📡 Запустить живой поиск", "callback_data": "START_LIVE"}]
+                        ]
+                    }
+                    
+                    if data == "SHOW_STATS":
+                        send_msg(chat_id, "⏳ Считаю статистику за неделю...", keyboard)
                         report = calculate_active_backtest()
                         send_msg(chat_id, report, keyboard)
+                    elif data == "START_LIVE":
+                        send_msg(chat_id, "✅ **Живой поиск активирован!**\n\nТеперь бот следит за рынком 24/7 и пришлет сигнал в этот чат, как только появится точка входа.", keyboard)
                     else:
-                        send_msg(chat_id, "🚀 Терминал готов.\n\nНажми кнопку ниже, чтобы увидеть статистику за неделю:", keyboard)
+                        welcome_text = (
+                            "👋 **Привет! Это торговый терминал.**\n\n"
+                            "Выбери нужное действие с помощью кнопок ниже:"
+                        )
+                        send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
         except Exception as e:
-            print(f"Ошибка в боте: {e}")
+            print(f"Ошибка бота: {e}")
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Active Bot Running"
+def home(): return "Trading Bot Running 24/7"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
+    threading.Thread(target=live_scanner, daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
