@@ -7,44 +7,89 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 
-def get_data(symbol):
+def get_data(symbol, interval="1h", limit=168):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=20"
-        with urllib.request.urlopen(url, context=context, timeout=5) as r: return json.loads(r.read())
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        with urllib.request.urlopen(url, context=context, timeout=5) as r: 
+            return json.loads(r.read())
     except: return []
 
-def check_strategy(candles):
-    prices = [float(c[4]) for c in candles]
-    sma = sum(prices) / len(prices)
-    stdev = (sum((x - sma)**2 for x in prices) / len(prices))**0.5
-    if prices[-1] < (sma - 3.0 * stdev): return "LONG"
-    if prices[-1] > (sma + 3.0 * stdev): return "SHORT"
-    return None
+def calculate_backtest():
+    """Динамический расчет статистики за последние 7 дней (168 часов)"""
+    t_all, w_all = 0, 0
+    details = ""
+    for symbol in SYMBOLS:
+        candles = get_data(symbol, "1h", 168)
+        if len(candles) < 20: continue
+        t, w = 0, 0
+        for i in range(20, len(candles) - 4):
+            prices = [float(c[4]) for c in candles[i-20:i+1]]
+            sma = sum(prices) / 20
+            stdev = (sum((x - sma)**2 for x in prices) / 20)**0.5
+            upper, lower = sma + (3.0 * stdev), sma - (3.0 * stdev)
+            
+            curr_p = prices[-1]
+            if curr_p < lower or curr_p > upper:
+                t += 1
+                next_p = float(candles[i+4][4])
+                if (curr_p < lower and next_p > curr_p) or (curr_p > upper and next_p < curr_p):
+                    w += 1
+        t_all += t
+        w_all += w
+        if t > 0:
+            details += f"🔹 {symbol.replace('USDT','')}: {w}/{t} ({(w/t)*100:.1f}%)\n"
+        else:
+            details += f"🔹 {symbol.replace('USDT','')}: 0 сделок\n"
+    
+    wr = (w_all / t_all * 100) if t_all > 0 else 0
+    report = (f"📊 СТАТИСТИКА ЗА 7 ДНЕЙ\n\n"
+              f"{details}\n"
+              f"📈 ВСЕГО СИГНАЛОВ: {t_all}\n"
+              f"✅ УСПЕШНЫХ: {w_all}\n"
+              f"🏆 WINRATE: {wr:.1f}%")
+    return report
 
-def send_msg(chat_id, text):
+def send_msg(chat_id, text, keyboard=None):
+    if not TELEGRAM_TOKEN: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={chat_id}&text={urllib.parse.quote(text)}"
-    urllib.request.urlopen(url, context=context, timeout=5)
+    if keyboard:
+        url += f"&reply_markup={urllib.parse.quote(json.dumps(keyboard))}"
+    try:
+        urllib.request.urlopen(url, context=context, timeout=5)
+    except: pass
 
 def bot_engine():
     last_update_id = 0
-    print("🤖 Бот запущен и слушает Telegram...")
+    print("🤖 Бот запущен и готов к работе...")
     while True:
         try:
-            # 1. Слушаем команды
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}"
-            updates = json.loads(urllib.request.urlopen(url, timeout=10).read().decode()).get("result", [])
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
+            updates = json.loads(urllib.request.urlopen(url, timeout=35).read().decode()).get("result", [])
             for u in updates:
                 last_update_id = u["update_id"] + 1
-                if "message" in u:
-                    send_msg(u["message"]["chat"]["id"], "Бот активен. Мониторю рынок...")
+                
+                chat_id = None
+                data = None
+                if "message" in u and "text" in u["message"]:
+                    chat_id = u["message"]["chat"]["id"]
+                elif "callback_query" in u:
+                    chat_id = u["callback_query"]["message"]["chat"]["id"]
+                    data = u["callback_query"]["data"]
+                
+                if chat_id:
+                    keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "🔄 Обновить статистику (7 дней)", "callback_data": "REFRESH_STATS"}]
+                        ]
+                    }
+                    if data == "REFRESH_STATS":
+                        send_msg(chat_id, "⏳ Анализирую графики топ-10 монет за 7 дней...")
+                        stats_text = calculate_backtest()
+                        send_msg(chat_id, stats_text, keyboard)
+                    else:
+                        send_msg(chat_id, "🤖 Бот активен! Нажми кнопку ниже, чтобы запросить актуальную статистику:", keyboard)
             
-            # 2. Сканируем рынок
-            for s in SYMBOLS:
-                sig = check_strategy(get_data(s))
-                if sig:
-                    for chat_id in [u.get("message", {}).get("chat", {}).get("id") for u in updates]:
-                        if chat_id: send_msg(chat_id, f"СИГНАЛ: {s} {sig}")
-            time.sleep(60)
+            time.sleep(1)
         except Exception as e:
             print(f"Ошибка: {e}")
             time.sleep(10)
