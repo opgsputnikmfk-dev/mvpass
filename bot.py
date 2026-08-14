@@ -32,10 +32,10 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- ПАРАМЕТРЫ QUANT-МОДЕЛИ ---
-INTERVAL = "15m"          # Таймфрейм свечей (15 минут)
-HISTORY_LIMIT = 300       # Количество свечей для анализа
-SCAN_INTERVAL = 900       # Пауза между сканированиями (900 секунд = 15 минут)
+# --- ПАРАМЕТРЫ QUANT-МОДЕЛИ (Для радара) ---
+INTERVAL = "15m"          
+HISTORY_LIMIT = 300       
+SCAN_INTERVAL = 900       
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", 
            "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "SHIBUSDT", 
@@ -44,9 +44,11 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
 subscribed_users = set()
 last_signal_times = {symbol: 0 for symbol in SYMBOLS}
 
-def get_market_data(symbol):
+def get_market_data(symbol, custom_interval=None, custom_limit=None):
+    interval = custom_interval if custom_interval else INTERVAL
+    limit = custom_limit if custom_limit else HISTORY_LIMIT
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit={HISTORY_LIMIT}"
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         with urllib.request.urlopen(url, context=context, timeout=10) as response:
             return json.loads(response.read())
     except Exception as e:
@@ -136,8 +138,8 @@ def get_ai_news_sentiment(coin_name, direction):
         return response.text.strip().upper().replace(".", "")
     except: return "НЕЙТРАЛЬНО"
 
-def get_quant_stats(symbol):
-    candles = get_market_data(symbol)
+def get_quant_stats(symbol, interval, limit):
+    candles = get_market_data(symbol, custom_interval=interval, custom_limit=limit)
     stats = {"t": 0, "w": 0}
     if not candles or len(candles) < 100: return stats
         
@@ -228,9 +230,13 @@ def main():
     
     print("🤖 Алгоритмический фонд активен.")
     last_update_id = 0
+    
+    # НОВОЕ МЕНЮ С ТРЕМЯ КНОПКАМИ
     keyboard = {
         "inline_keyboard": [
-            [{"text": "📊 Математический Бэктест (15м)", "callback_data": "BACKTEST_QUANT"}]
+            [{"text": "📊 Статистика за 7 дней (15м)", "callback_data": "BT_7D"}],
+            [{"text": "📊 Статистика за 30 дней (1ч)", "callback_data": "BT_30D"}],
+            [{"text": "📊 Статистика за 1 год (1д)", "callback_data": "BT_1Y"}]
         ]
     }
     
@@ -248,22 +254,30 @@ def main():
                     chat_id = u["message"]["chat"]["id"]
                     if chat_id not in subscribed_users:
                         subscribed_users.add(chat_id)
-                        send_telegram_message(chat_id, "✅ Доступ к Quant-радару открыт. Бот сканирует 15 монет на отклонения 3 Sigma + ADX. Ожидайте автоматических сигналов.", keyboard)
+                        send_telegram_message(chat_id, "✅ Доступ к Quant-радару открыт. Бот сканирует 15 монет. Выберите период для бэктеста стратегии 3 Сигмы:", keyboard)
                     else:
-                        send_telegram_message(chat_id, "🤖 Главное Quant-меню:", keyboard)
+                        send_telegram_message(chat_id, "🤖 Quant-меню. Выберите период бэктеста:", keyboard)
                         
                 elif "callback_query" in u:
                     q = u["callback_query"]
                     chat_id = q["message"]["chat"]["id"]
                     
-                    if q["data"] == "BACKTEST_QUANT":
-                        send_telegram_message(chat_id, "⏳ Рассчитываю статистику 3σ по 15 монетам (таймфрейм 15 минут). Ожидайте...", keyboard)
+                    # ОБРАБОТКА НОВЫХ КНОПОК
+                    if q["data"] in ["BT_7D", "BT_30D", "BT_1Y"]:
+                        if q["data"] == "BT_7D":
+                            bt_interval, bt_limit, title = "15m", 672, "7 ДНЕЙ (Таймфрейм 15м)"
+                        elif q["data"] == "BT_30D":
+                            bt_interval, bt_limit, title = "1h", 720, "30 ДНЕЙ (Таймфрейм 1ч)"
+                        elif q["data"] == "BT_1Y":
+                            bt_interval, bt_limit, title = "1d", 365, "1 ГОД (Таймфрейм 1д)"
+                            
+                        send_telegram_message(chat_id, f"⏳ Запуск глубокого математического бэктеста за {title}. Анализирую историю 15 графиков...", keyboard)
                         
                         t_all, w_all = 0, 0
                         details = ""
                         
                         for symbol in SYMBOLS:
-                            stats = get_quant_stats(symbol)
+                            stats = get_quant_stats(symbol, bt_interval, bt_limit)
                             coin = symbol.replace("USDT", "")
                             t, w = stats["t"], stats["w"]
                             
@@ -275,17 +289,16 @@ def main():
                         
                         if t_all > 0:
                             wr_all = (w_all / t_all) * 100
-                            msg = (f"📊 СТАТИСТИКА 3σ + ADX (15м график)\n\n"
+                            msg = (f"📊 ИТОГИ БЭКТЕСТА: {title}\n\n"
                                    f"{details}\n"
-                                   f"📈 ИТОГО АНОМАЛИЙ: {t_all}\n"
-                                   f"✅ ОТРАБОТКА: {w_all}\n"
-                                   f"🏆 WINRATE ПОРТФЕЛЯ: {wr_all:.1f}%")
+                                   f"📈 ИТОГО СИГНАЛОВ: {t_all}\n"
+                                   f"✅ УСПЕШНЫХ (Тейк-профит): {w_all}\n"
+                                   f"🏆 WINRATE АЛГОРИТМА: {wr_all:.1f}%")
                         else:
-                            msg = "📉 На истории текущего 15-минутного графика аномалий не найдено."
+                            msg = f"📉 За период {title} аномалий не найдено."
                             
                         send_telegram_message(chat_id, msg, keyboard)
         except Exception as e:
-            # ВОТ ТУТ МЫ БУДЕМ ВИДЕТЬ ОШИБКИ ТЕЛЕГРАМА В ЛОГАХ
             print(f"🚨 Ошибка Telegram: {e}")
             time.sleep(3)
 
