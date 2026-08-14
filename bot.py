@@ -32,10 +32,10 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- ПАРАМЕТРЫ QUANT-МОДЕЛИ (Для радара) ---
-INTERVAL = "15m"          
-HISTORY_LIMIT = 300       
-SCAN_INTERVAL = 900       
+# --- ПАРАМЕТРЫ QUANT-МОДЕЛИ ---
+INTERVAL = "15m"          # Таймфрейм свечей (15 минут)
+HISTORY_LIMIT = 300       # Количество свечей для анализа
+SCAN_INTERVAL = 900       # Пауза между сканированиями (900 секунд = 15 минут)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", 
            "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "SHIBUSDT", 
@@ -61,6 +61,17 @@ def calculate_bollinger_bands(prices, period=20, num_std=3.0):
     variance = sum((x - sma) ** 2 for x in prices[-period:]) / period
     stdev = math.sqrt(variance)
     return sma + (num_std * stdev), sma, sma - (num_std * stdev)
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period + 1: return 50
+    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas[-period:]]
+    losses = [-d if d < 0 else 0 for d in deltas[-period:]]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0: return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1: return 100.0
@@ -116,14 +127,16 @@ def calculate_adx(candles, period=14):
 def evaluate_quant_strategy(candles):
     if len(candles) < 30: return None
     prices = [float(c[4]) for c in candles]
-    
     current_price = prices[-1]
+    
     upper, middle, lower = calculate_bollinger_bands(prices, 20, 3.0)
     adx = calculate_adx(candles, 14)
+    rsi = calculate_rsi(prices, 14)
     
+    # Снайперские условия: Аномалия (3 Сигмы) + Флэт (ADX < 25) + Экстремальный RSI
     if adx < 25:
-        if current_price < lower: return "LONG"
-        elif current_price > upper: return "SHORT"
+        if current_price < lower and rsi < 30: return "LONG"
+        elif current_price > upper and rsi > 70: return "SHORT"
         
     return None
 
@@ -179,13 +192,13 @@ def broadcast_message(text):
         send_telegram_message(chat_id, text)
 
 def auto_scanner():
-    print("📡 Quant-Радар запущен. Сканирование 3 Сигм каждые 15 мин...")
+    print("📡 Снайпер-Радар (3σ + RSI) запущен каждые 15 мин...")
     while True:
         if not subscribed_users:
             time.sleep(10)
             continue
             
-        print("\n🔍 Запуск поиска аномалий (Топ-15)...")
+        print("\n🔍 Поиск снайперских точек (Топ-15)...")
         for symbol in SYMBOLS:
             time.sleep(1.5)
             candles = get_market_data(symbol)
@@ -208,17 +221,17 @@ def auto_scanner():
                     sl = p - (atr * 2.0) if sig == "LONG" else p + (atr * 2.0)
                     tp = p + (atr * 0.5) if sig == "LONG" else p - (atr * 0.5)
                     
-                    msg = (f"🎓 QUANT АНОМАЛИЯ (3σ): {coin_name}\n"
-                           f"📉 ADX (Сила тренда): < 25 (Флэт)\n"
+                    msg = (f"🎯 СНАЙПЕР-СИГНАЛ (3σ + RSI): {coin_name}\n"
+                           f"📉 ADX (Флэт): < 25\n"
                            f"📈 Направление: {sig}\n"
                            f"📰 ИИ Фон: {news}\n"
                            f"💰 Вход: ${p:,.4f}\n"
-                           f"❌ Защитный Стоп: ${sl:,.4f}\n"
-                           f"🎯 Микро-Тейк: ${tp:,.4f}")
+                           f"❌ Стоп: ${sl:,.4f}\n"
+                           f"🎯 Тейк: ${tp:,.4f}")
                     
                     broadcast_message(msg)
                     last_signal_times[symbol] = candle_time
-                    print(f"✅ Аномалия найдена! Сигнал по {symbol}")
+                    print(f"✅ Сигнал найден! {symbol}")
         time.sleep(SCAN_INTERVAL)
 
 def main():
@@ -231,7 +244,6 @@ def main():
     print("🤖 Алгоритмический фонд активен.")
     last_update_id = 0
     
-    # НОВОЕ МЕНЮ С ТРЕМЯ КНОПКАМИ
     keyboard = {
         "inline_keyboard": [
             [{"text": "📊 Статистика за 7 дней (15м)", "callback_data": "BT_7D"}],
@@ -254,24 +266,23 @@ def main():
                     chat_id = u["message"]["chat"]["id"]
                     if chat_id not in subscribed_users:
                         subscribed_users.add(chat_id)
-                        send_telegram_message(chat_id, "✅ Доступ к Quant-радару открыт. Бот сканирует 15 монет. Выберите период для бэктеста стратегии 3 Сигмы:", keyboard)
+                        send_telegram_message(chat_id, "✅ Доступ открыт. Снайпер-стратегия (3σ + RSI) активирована. Выберите период для бэктеста:", keyboard)
                     else:
-                        send_telegram_message(chat_id, "🤖 Quant-меню. Выберите период бэктеста:", keyboard)
+                        send_telegram_message(chat_id, "🤖 Главное меню. Выберите период бэктеста:", keyboard)
                         
                 elif "callback_query" in u:
                     q = u["callback_query"]
                     chat_id = q["message"]["chat"]["id"]
                     
-                    # ОБРАБОТКА НОВЫХ КНОПОК
                     if q["data"] in ["BT_7D", "BT_30D", "BT_1Y"]:
                         if q["data"] == "BT_7D":
-                            bt_interval, bt_limit, title = "15m", 672, "7 ДНЕЙ (Таймфрейм 15м)"
+                            bt_interval, bt_limit, title = "15m", 672, "7 ДНЕЙ (15м)"
                         elif q["data"] == "BT_30D":
-                            bt_interval, bt_limit, title = "1h", 720, "30 ДНЕЙ (Таймфрейм 1ч)"
+                            bt_interval, bt_limit, title = "1h", 720, "30 ДНЕЙ (1ч)"
                         elif q["data"] == "BT_1Y":
-                            bt_interval, bt_limit, title = "1d", 365, "1 ГОД (Таймфрейм 1д)"
+                            bt_interval, bt_limit, title = "1d", 365, "1 ГОД (1д)"
                             
-                        send_telegram_message(chat_id, f"⏳ Запуск глубокого математического бэктеста за {title}. Анализирую историю 15 графиков...", keyboard)
+                        send_telegram_message(chat_id, f"⏳ Запуск глубокого бэктеста стратегии 80%+ за {title}...", keyboard)
                         
                         t_all, w_all = 0, 0
                         details = ""
@@ -289,13 +300,13 @@ def main():
                         
                         if t_all > 0:
                             wr_all = (w_all / t_all) * 100
-                            msg = (f"📊 ИТОГИ БЭКТЕСТА: {title}\n\n"
+                            msg = (f"📊 ИТОГИ СНАЙПЕР-БЭКТЕСТА: {title}\n\n"
                                    f"{details}\n"
-                                   f"📈 ИТОГО СИГНАЛОВ: {t_all}\n"
-                                   f"✅ УСПЕШНЫХ (Тейк-профит): {w_all}\n"
-                                   f"🏆 WINRATE АЛГОРИТМА: {wr_all:.1f}%")
+                                   f"📈 ВСЕГО СИГНАЛОВ: {t_all}\n"
+                                   f"✅ УСПЕШНЫХ: {w_all}\n"
+                                   f"🏆 WINRATE: {wr_all:.1f}%")
                         else:
-                            msg = f"📉 За период {title} аномалий не найдено."
+                            msg = f"📉 За период {title} снайперских точек входа не найдено."
                             
                         send_telegram_message(chat_id, msg, keyboard)
         except Exception as e:
