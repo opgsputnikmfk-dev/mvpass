@@ -8,7 +8,8 @@ app = Flask(__name__)
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 
 def get_data(symbol):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=500"
+    # Используем официальный публичный дата-сервер Binance без гео-блокировок
+    url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=15m&limit=672"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, context=context, timeout=10) as r: 
@@ -24,7 +25,7 @@ def calculate_active_backtest():
     for symbol in SYMBOLS:
         candles = get_data(symbol)
         if not candles or len(candles) < 30: 
-            details += f"🔹 {symbol.replace('USDT','')}: нет данных\n"
+            details += f"🔹 **{symbol.replace('USDT','')}**: нет данных\n"
             continue
         
         try:
@@ -63,7 +64,7 @@ def calculate_active_backtest():
             details += f"🔹 **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **АКТИВНЫЙ ИТОГ СТРАТЕГИИ (15m)**\n\n"
+    return (f"📊 **АКТИВНЫЙ ИТОГ СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
@@ -78,7 +79,7 @@ def send_msg(chat_id, text, keyboard=None):
 
 def bot_engine():
     last_update_id = 0
-    print("🤖 Бот запущен и готов к работе...")
+    print("🤖 Бот успешно запущен...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -90,13 +91,13 @@ def bot_engine():
                 data = u.get("callback_query", {}).get("data")
                 
                 if chat_id:
-                    keyboard = {"inline_keyboard": [[{"text": "📊 Посмотреть активные сделки", "callback_data": "ACTIVE_STATS"}]]}
+                    keyboard = {"inline_keyboard": [[{"text": "📊 Посмотреть активные сделки (7 дней)", "callback_data": "ACTIVE_STATS"}]]}
                     if data == "ACTIVE_STATS":
-                        send_msg(chat_id, "⏳ Сканирую 15-минутные графики...")
+                        send_msg(chat_id, "⏳ Сканирую 15-минутные графики за 7 дней...")
                         report = calculate_active_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
-                        send_msg(chat_id, "🚀 Терминал готов.\n\nНажми кнопку ниже, чтобы увидеть сделки:", keyboard)
+                        send_msg(chat_id, "🚀 Терминал готов.\n\nНажми кнопку ниже, чтобы увидеть статистику за неделю:", keyboard)
             time.sleep(1)
         except Exception as e:
             print(f"Ошибка в боте: {e}")
