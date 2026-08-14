@@ -17,30 +17,50 @@ def get_data(symbol):
     except:
         return []
 
-def calculate_active_backtest():
+def calculate_ema(prices, period):
+    if len(prices) < period: return prices[-1]
+    multiplier = 2 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for price in prices[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+def calculate_smart_backtest():
+    """Бэктест с фильтрами тренда (EMA) и объема для высокого WinRate"""
     t_all, w_all = 0, 0
     details = ""
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
-        if not candles or len(candles) < 30: continue
+        if not candles or len(candles) < 50: continue
         
         try:
             highs = [float(c[2]) for c in candles]
             lows = [float(c[3]) for c in candles]
             closes = [float(c[4]) for c in candles]
+            volumes = [float(c[5]) for c in candles]
         except:
             continue
         
         t, w = 0, 0
-        for i in range(20, len(candles) - 4):
+        for i in range(50, len(candles) - 4):
             prev_high = max(highs[i-20:i])
             prev_low = min(lows[i-20:i])
             curr_p = closes[i]
             
+            # Фильтр объема: объем свечи выше среднего за 20 баров
+            avg_vol = sum(volumes[i-20:i]) / 20
+            if volumes[i] < avg_vol: 
+                continue
+                
+            # Трендовый фильтр (EMA 50)
+            ema50 = calculate_ema(closes[:i+1], 50)
+            
             sig = None
-            if curr_p > prev_high: sig = "LONG"
-            elif curr_p < prev_low: sig = "SHORT"
+            if curr_p > prev_high and curr_p > ema50:
+                sig = "LONG"
+            elif curr_p < prev_low and curr_p < ema50:
+                sig = "SHORT"
                 
             if sig:
                 t += 1
@@ -58,11 +78,11 @@ def calculate_active_backtest():
             details += f"• **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **СТАТИСТИКА ЗА 7 ДНЕЙ (15m)**\n\n"
+    return (f"📊 **УМНАЯ СТАТИСТИКА ЗА 7 ДНЕЙ (Фильтры EMA + Объем)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
-            f"🏆 **Общий WinRate:** {winrate:.1f}%")
+            f"🏆 **Итоговый WinRate:** {winrate:.1f}%")
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -76,39 +96,46 @@ def broadcast(text):
         send_msg(chat_id, text)
 
 def live_scanner():
-    """Фоновый сканер: ищет свежие пробои и шлет сигналы"""
-    print("📡 Фоновый сканер запущен...")
+    """Фоновый сканер с фильтрами качества"""
+    print("📡 Умный сканер запущен...")
     last_alerts = {}
     while True:
         try:
             for symbol in SYMBOLS:
                 candles = get_data(symbol)
-                if not candles or len(candles) < 25: continue
+                if not candles or len(candles) < 50: continue
                 
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
                 closes = [float(c[4]) for c in candles]
+                volumes = [float(c[5]) for c in candles]
                 
                 prev_high = max(highs[-21:-1])
                 prev_low = min(lows[-21:-1])
                 curr_p = closes[-1]
                 
+                # Проверка фильтров в реальном времени
+                avg_vol = sum(volumes[-21:-1]) / 20
+                if volumes[-1] < avg_vol: continue
+                
+                ema50 = calculate_ema(closes, 50)
+                
                 signal = None
-                if curr_p > prev_high: signal = "LONG (Пробой вверх)"
-                elif curr_p < prev_low: signal = "SHORT (Пробой вниз)"
+                if curr_p > prev_high and curr_p > ema50: signal = "LONG (По тренду с объемом)"
+                elif curr_p < prev_low and curr_p < ema50: signal = "SHORT (По тренду с объемом)"
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
+                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа
                         last_alerts[symbol] = now
-                        msg = (f"🚨 **НОВЫЙ СИГНАЛ**\n\n"
+                        msg = (f"🔥 **КАЧЕСТВЕННЫЙ СИГНАЛ**\n\n"
                                f"• Монета: **{symbol.replace('USDT','')}**\n"
-                               f"• Направление: **{signal}**\n"
+                               f"• Сигнал: **{signal}**\n"
                                f"• Цена: `{curr_p}`\n"
                                f"• Таймфрейм: 15m")
                         broadcast(msg)
                 time.sleep(2)
-            time.sleep(300) # Проверка каждые 5 минут
+            time.sleep(300)
         except Exception as e:
             print(f"Ошибка сканера: {e}")
             time.sleep(30)
@@ -130,21 +157,19 @@ def bot_engine():
                     active_chats.add(chat_id)
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "📊 Статистика за 7 дней", "callback_data": "SHOW_STATS"}],
-                            [{"text": "📡 Запустить живой поиск", "callback_data": "START_LIVE"}]
+                            [{"text": "📊 Посмотреть умную статистику (7 дней)", "callback_data": "SHOW_STATS"}]
                         ]
                     }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Считаю статистику за неделю...", keyboard)
-                        report = calculate_active_backtest()
+                        send_msg(chat_id, "⏳ Анализирую графики с учетом тренда и объемов...", keyboard)
+                        report = calculate_smart_backtest()
                         send_msg(chat_id, report, keyboard)
-                    elif data == "START_LIVE":
-                        send_msg(chat_id, "✅ **Живой поиск активирован!**\n\nТеперь бот следит за рынком 24/7 и пришлет сигнал в этот чат, как только появится точка входа.", keyboard)
                     else:
                         welcome_text = (
-                            "👋 **Привет! Это торговый терминал.**\n\n"
-                            "Выбери нужное действие с помощью кнопок ниже:"
+                            "👋 **Торговый терминал активен 24/7**\n\n"
+                            "Бот автоматически отслеживает сильные пробои по тренду с подтверждением объема.\n\n"
+                            "Нажми кнопку ниже, чтобы проверить обновленную статистику:"
                         )
                         send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
@@ -153,7 +178,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Trading Bot Running 24/7"
+def home(): return "Smart Trading Bot Running"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
