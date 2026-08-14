@@ -17,54 +17,44 @@ def get_data(symbol):
     except:
         return []
 
-def calculate_ema(prices, period):
-    if len(prices) < period: return prices[-1]
-    multiplier = 2 / (period + 1)
-    ema = sum(prices[:period]) / period
-    for price in prices[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
-
-def calculate_smart_backtest():
-    """Бэктест с фильтрами тренда (EMA) и объема для высокого WinRate"""
+def calculate_mean_reversion_backtest():
+    """Стратегия возврата к среднему (Bollinger Bands): высокая частота и высокий WinRate"""
     t_all, w_all = 0, 0
     details = ""
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
-        if not candles or len(candles) < 50: continue
+        if not candles or len(candles) < 30: continue
         
         try:
-            highs = [float(c[2]) for c in candles]
-            lows = [float(c[3]) for c in candles]
             closes = [float(c[4]) for c in candles]
-            volumes = [float(c[5]) for c in candles]
         except:
             continue
         
         t, w = 0, 0
-        for i in range(50, len(candles) - 4):
-            prev_high = max(highs[i-20:i])
-            prev_low = min(lows[i-20:i])
+        for i in range(20, len(candles) - 4):
+            p_slice = closes[i-20:i+1]
+            sma = sum(p_slice) / 20
+            stdev = (sum((x - sma)**2 for x in p_slice) / 20)**0.5
+            
+            # Границы полос Боллинджера (2 стандартных отклонения)
+            upper_band = sma + (2.0 * stdev)
+            lower_band = sma - (2.0 * stdev)
+            
             curr_p = closes[i]
-            
-            # Фильтр объема: объем свечи выше среднего за 20 баров
-            avg_vol = sum(volumes[i-20:i]) / 20
-            if volumes[i] < avg_vol: 
-                continue
-                
-            # Трендовый фильтр (EMA 50)
-            ema50 = calculate_ema(closes[:i+1], 50)
-            
             sig = None
-            if curr_p > prev_high and curr_p > ema50:
+            
+            # Если цена упала ниже нижней границы — ждем отскок вверх (LONG)
+            if curr_p <= lower_band:
                 sig = "LONG"
-            elif curr_p < prev_low and curr_p < ema50:
+            # Если цена выросла выше верхней границы — ждем откат вниз (SHORT)
+            elif curr_p >= upper_band:
                 sig = "SHORT"
                 
             if sig:
                 t += 1
-                next_p = closes[i+4]
+                next_p = closes[i+4] # Проверка через 1 час (возврат к среднему)
+                # Успех, если цена пошла в сторону SMA
                 if (sig == "LONG" and next_p > curr_p) or (sig == "SHORT" and next_p < curr_p):
                     w += 1
                     
@@ -78,7 +68,7 @@ def calculate_smart_backtest():
             details += f"• **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **УМНАЯ СТАТИСТИКА ЗА 7 ДНЕЙ (Фильтры EMA + Объем)**\n\n"
+    return (f"📊 **СТАТИСТИКА СТРАТЕГИИ «ВОЗВРАТ К СРЕДНЕМУ» (7 ДНЕЙ)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
@@ -96,39 +86,33 @@ def broadcast(text):
         send_msg(chat_id, text)
 
 def live_scanner():
-    """Фоновый сканер с фильтрами качества"""
-    print("📡 Умный сканер запущен...")
+    """Фоновый сканер точек возврата к среднему"""
+    print("📡 Сканер возврата к среднему запущен...")
     last_alerts = {}
     while True:
         try:
             for symbol in SYMBOLS:
                 candles = get_data(symbol)
-                if not candles or len(candles) < 50: continue
+                if not candles or len(candles) < 25: continue
                 
-                highs = [float(c[2]) for c in candles]
-                lows = [float(c[3]) for c in candles]
                 closes = [float(c[4]) for c in candles]
-                volumes = [float(c[5]) for c in candles]
+                p_slice = closes[-20:]
+                sma = sum(p_slice) / 20
+                stdev = (sum((x - sma)**2 for x in p_slice) / 20)**0.5
                 
-                prev_high = max(highs[-21:-1])
-                prev_low = min(lows[-21:-1])
+                upper_band = sma + (2.0 * stdev)
+                lower_band = sma - (2.0 * stdev)
                 curr_p = closes[-1]
                 
-                # Проверка фильтров в реальном времени
-                avg_vol = sum(volumes[-21:-1]) / 20
-                if volumes[-1] < avg_vol: continue
-                
-                ema50 = calculate_ema(closes, 50)
-                
                 signal = None
-                if curr_p > prev_high and curr_p > ema50: signal = "LONG (По тренду с объемом)"
-                elif curr_p < prev_low and curr_p < ema50: signal = "SHORT (По тренду с объемом)"
+                if curr_p <= lower_band: signal = "LONG (Отскок от нижней границы)"
+                elif curr_p >= upper_band: signal = "SHORT (Откат от верхней границы)"
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа
+                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
                         last_alerts[symbol] = now
-                        msg = (f"🔥 **КАЧЕСТВЕННЫЙ СИГНАЛ**\n\n"
+                        msg = (f"🎯 **СИГНАЛ НА ОТСКОК**\n\n"
                                f"• Монета: **{symbol.replace('USDT','')}**\n"
                                f"• Сигнал: **{signal}**\n"
                                f"• Цена: `{curr_p}`\n"
@@ -157,19 +141,19 @@ def bot_engine():
                     active_chats.add(chat_id)
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "📊 Посмотреть умную статистику (7 дней)", "callback_data": "SHOW_STATS"}]
+                            [{"text": "📊 Статистика отскоков за 7 дней", "callback_data": "SHOW_STATS"}]
                         ]
                     }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Анализирую графики с учетом тренда и объемов...", keyboard)
-                        report = calculate_smart_backtest()
+                        send_msg(chat_id, "⏳ Считаю точность стратегии возврата к среднему...", keyboard)
+                        report = calculate_mean_reversion_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
                         welcome_text = (
-                            "👋 **Торговый терминал активен 24/7**\n\n"
-                            "Бот автоматически отслеживает сильные пробои по тренду с подтверждением объема.\n\n"
-                            "Нажми кнопку ниже, чтобы проверить обновленную статистику:"
+                            "👋 **Торговый терминал (Стратегия отскоков)**\n\n"
+                            "Бот ищет моменты перекупленности и перепроданности для торговли на возврат цены к среднему.\n\n"
+                            "Нажми кнопку ниже, чтобы проверить статистику:"
                         )
                         send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
@@ -178,7 +162,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Smart Trading Bot Running"
+def home(): return "Mean Reversion Bot Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
