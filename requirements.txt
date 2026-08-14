@@ -1,25 +1,2 @@
-from google import genai
-from google.genai import types
-from flask import Flask
-import urllib.request
-import urllib.parse
-import json
-import ssl
-import time
-import math
-import threading
-import os # <--- НОВОЕ: Библиотека для работы с системой
-
-# --- ТВОИ КЛЮЧИ ТЕПЕРЬ СПРЯТАНЫ ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    print("ОШИБКА: Ключи не найдены в переменных окружения!")
-    exit(1)
-
-client = genai.Client(api_key=GEMINI_API_KEY)
-context = ssl._create_unverified_context()
-
-app = Flask(__name__)
-# ... (дальше весь твой остальной код без изменений)
+google-genai
+flask
