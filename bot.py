@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 
-def get_data(symbol, interval="15m", limit=672): # 672 свечи по 15м = ровно 7 дней
+def get_data(symbol, interval="15m", limit=672):
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
         with urllib.request.urlopen(url, context=context, timeout=5) as r: 
@@ -15,13 +15,12 @@ def get_data(symbol, interval="15m", limit=672): # 672 свечи по 15м = р
     except: return []
 
 def calculate_backtest():
-    """Анализ паттернов и сделок за последние 7 дней"""
     t_all, w_all = 0, 0
     details = ""
     
     for symbol in SYMBOLS:
         candles = get_data(symbol, "15m", 672)
-        if len(candles) < 30: continue
+        if len(candles) < 15: continue
         
         t, w = 0, 0
         closes = [float(c[4]) for c in candles]
@@ -29,17 +28,17 @@ def calculate_backtest():
         highs = [float(c[2]) for c in candles]
         lows = [float(c[3]) for c in candles]
         
-        # Симуляция прогона по истории за 7 дней с шагом в свечах
-        for i in range(25, len(candles) - 4):
-            prev_high = max(highs[i-20:i])
-            prev_min = min(lows[i-20:i])
-            avg_vol = sum(volumes[i-20:i]) / 20
+        # Смягченный период до 10 свечей для большей активности
+        for i in range(10, len(candles) - 4):
+            prev_high = max(highs[i-10:i])
+            prev_min = min(lows[i-10:i])
+            avg_vol = sum(volumes[i-10:i]) / 10
             
             curr_close = closes[i]
             curr_vol = volumes[i]
             
-            # Проверка условий стратегии (Пробой + Объем)
-            if curr_vol > (avg_vol * 1.3):
+            # Смягченное условие объема (выше среднего)
+            if curr_vol >= avg_vol:
                 sig = None
                 if curr_close > prev_high:
                     sig = "LONG"
@@ -48,7 +47,6 @@ def calculate_backtest():
                 
                 if sig:
                     t += 1
-                    # Проверяем отработку через 4 свечи (1 час)
                     next_close = closes[i+4]
                     if (sig == "LONG" and next_close > curr_close) or (sig == "SHORT" and next_close < curr_close):
                         w += 1
@@ -82,7 +80,7 @@ def send_msg(chat_id, text, keyboard=None):
 
 def bot_engine():
     last_update_id = 0
-    print("🤖 Бот с кнопкой статистики запущен...")
+    print("🤖 Бот с оптимизированной статистикой запущен...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -104,11 +102,11 @@ def bot_engine():
                         ]
                     }
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Анализирую графики топ-10 монет за последнюю неделю...")
+                        send_msg(chat_id, "⏳ Считаю результаты по обновленной модели...")
                         report = calculate_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
-                        send_msg(chat_id, "👋 Привет! Это торговый терминал-анализатор.\n\nНажми кнопку ниже, чтобы проверить результаты нашей стратегии:", keyboard)
+                        send_msg(chat_id, "👋 Торговый терминал готов.\n\nНажми кнопку ниже для получения актуальной статистики:", keyboard)
             
             time.sleep(1)
         except Exception as e:
