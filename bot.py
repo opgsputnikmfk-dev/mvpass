@@ -8,6 +8,7 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 active_chats = set()
+start_time = time.time()
 
 def get_data(symbol):
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=15m&limit=672"
@@ -75,8 +76,8 @@ def calculate_terminal_backtest():
         rows.append(f"{sym_name} | {str(w).rjust(2)}/{str(t).rjust(3)} | {wr_sym:5.1f}%")
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    
     table_content = "\n".join(rows)
+    
     report = (
         "=== SYSTEM BACKTEST REPORT (7D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
@@ -90,6 +91,16 @@ def calculate_terminal_backtest():
     )
     return f"```text\n{report}\n```"
 
+def get_main_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "📊 SYSTEM STATS (7D)", "callback_data": "SHOW_STATS"}],
+            [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
+             {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
+            [{"text": "ℹ️ HELP & INFO", "callback_data": "SHOW_HELP"}]
+        ]
+    }
+
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={chat_id}&text={urllib.parse.quote(text)}&parse_mode=Markdown"
@@ -99,7 +110,7 @@ def send_msg(chat_id, text, keyboard=None):
 
 def broadcast(text):
     for chat_id in active_chats:
-        send_msg(chat_id, text)
+        send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
     print("Terminal Scanner Online...")
@@ -178,26 +189,53 @@ def bot_engine():
                 
                 if chat_id:
                     active_chats.add(chat_id)
-                    keyboard = {
-                        "inline_keyboard": [
-                            [{"text": "SYSTEM STATS (7D)", "callback_data": "SHOW_STATS"}]
-                        ]
-                    }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing analytics...", keyboard)
+                        send_msg(chat_id, "Processing analytics...", get_main_keyboard())
                         report = calculate_terminal_backtest()
-                        send_msg(chat_id, report, keyboard)
+                        send_msg(chat_id, report, get_main_keyboard())
+                        
+                    elif data == "SHOW_ASSETS":
+                        assets_list = ", ".join([s.replace('USDT', '') for s in SYMBOLS])
+                        msg = f"```text\nMONITORED ASSETS (10):\n{assets_list}\n```"
+                        send_msg(chat_id, msg, get_main_keyboard())
+                        
+                    elif data == "BOT_STATUS":
+                        uptime_sec = int(time.time() - start_time)
+                        hours = uptime_sec // 3600
+                        minutes = (uptime_sec % 3600) // 60
+                        msg = (
+                            "```text\n"
+                            "=== SYSTEM STATUS ===\n"
+                            f"STATUS: ACTIVE (24/7)\n"
+                            f"UPTIME: {hours}h {minutes}m\n"
+                            f"ACTIVE CHATS: {len(active_chats)}\n"
+                            f"TIMEFRAME: 15m\n"
+                            "```"
+                        )
+                        send_msg(chat_id, msg, get_main_keyboard())
+                        
+                    elif data == "SHOW_HELP":
+                        msg = (
+                            "```text\n"
+                            "=== TERMINAL HELP ===\n"
+                            "1. SYSTEM STATS: 7-day historical backtest.\n"
+                            "2. ASSETS: List of tracked pairs.\n"
+                            "3. SIGNALS: Real-time 15m trend pullbacks.\n"
+                            "   Includes Entry, SL, TP1, and TP2.\n"
+                            "```"
+                        )
+                        send_msg(chat_id, msg, get_main_keyboard())
+                        
                     else:
                         welcome_text = (
                             "```text\n"
-                            "TRADING TERMINAL v2.1 ACTIVE\n"
+                            "TRADING TERMINAL v2.2 ACTIVE\n"
                             "---------------------------------\n"
-                            "System monitoring 10 crypto assets.\n"
-                            "Use the control panel below.\n"
+                            "Select an option from the menu below:\n"
                             "```"
                         )
-                        send_msg(chat_id, welcome_text, keyboard)
+                        send_msg(chat_id, welcome_text, get_main_keyboard())
             time.sleep(1)
         except Exception as e:
             print(f"Bot error: {e}")
@@ -209,4 +247,4 @@ def home(): return "Terminal Server Active"
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
     threading.Thread(target=live_scanner, daemon=True).start()
-    app.run(host='0.0.0.0', port=int(os.environ.com.get("PORT", 10000) if hasattr(os, "environ") else 10000))
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
