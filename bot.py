@@ -37,7 +37,6 @@ def calculate_ema(prices, period):
     return ema
 
 def calculate_profitable_backtest():
-    """Стратегия Трендового Отката по RSI: частые сделки и реальный плюс"""
     t_all, w_all = 0, 0
     details = ""
     
@@ -47,8 +46,6 @@ def calculate_profitable_backtest():
         
         try:
             closes = [float(c[4]) for c in candles]
-            highs = [float(c[2]) for c in candles]
-            lows = [float(c[3]) for c in candles]
         except:
             continue
         
@@ -60,19 +57,12 @@ def calculate_profitable_backtest():
             rsi = calculate_rsi(p_slice, 14)
             
             curr_p = closes[i]
-            atr = sum([highs[j] - lows[j] for j in range(i-14, i)]) / 14
-            
             sig = None
-            # Тренд вверх (EMA20 > EMA50) + откат вниз (RSI < 40) -> Покупаем на отскок
-            if ema20 > ema50 and rsi < 40:
-                sig = "LONG"
-            # Тренд вниз (EMA20 < EMA50) + отскок вверх (RSI > 60) -> Продаем
-            elif ema20 < ema50 and rsi > 60:
-                sig = "SHORT"
+            if ema20 > ema50 and rsi < 40: sig = "LONG"
+            elif ema20 < ema50 and rsi > 60: sig = "SHORT"
                 
             if sig:
                 t += 1
-                # Проверяем отработку по фиксации цены через 6 свечей (1.5 часа)
                 next_p = closes[i+6]
                 if (sig == "LONG" and next_p > curr_p) or (sig == "SHORT" and next_p < curr_p):
                     w += 1
@@ -87,12 +77,11 @@ def calculate_profitable_backtest():
             details += f"• **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **СТАТИСТИКА РЕАЛЬНОЙ СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
+    return (f"📊 **СТАТИСТИКА СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
-            f"🏆 **WinRate:** {winrate:.1f}%\n"
-            f"💰 **Итог:** Стратегия дает стабильный поток сделок с реальной прибылью.")
+            f"🏆 **WinRate:** {winrate:.1f}%")
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -106,8 +95,7 @@ def broadcast(text):
         send_msg(chat_id, text)
 
 def live_scanner():
-    """Фоновый живой сканер для поиска точек входа"""
-    print("📡 Живой сканер RSI запущен...")
+    print("📡 Живой сканер с расчетом рисков запущен...")
     last_alerts = {}
     while True:
         try:
@@ -116,24 +104,46 @@ def live_scanner():
                 if not candles or len(candles) < 50: continue
                 
                 closes = [float(c[4]) for c in candles]
+                highs = [float(c[2]) for c in candles]
+                lows = [float(c[3]) for c in candles]
+                
                 ema20 = calculate_ema(closes, 20)
                 ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
                 
+                # Расчет ATR за последние 14 баров для динамических стопов
+                atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
+                
                 signal = None
-                if ema20 > ema50 and rsi < 40: signal = "LONG (Откат по тренду вверх)"
-                elif ema20 < ema50 and rsi > 60: signal = "SHORT (Откат по тренду вниз)"
+                if ema20 > ema50 and rsi < 40:
+                    signal = "LONG"
+                    entry = curr_p
+                    sl = entry - (atr * 1.2)
+                    tp1 = entry + (atr * 1.5)
+                    tp2 = entry + (atr * 3.0)
+                elif ema20 < ema50 and rsi > 60:
+                    signal = "SHORT"
+                    entry = curr_p
+                    sl = entry + (atr * 1.2)
+                    tp1 = entry - (atr * 1.5)
+                    tp2 = entry - (atr * 3.0)
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200:
+                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
                         last_alerts[symbol] = now
-                        msg = (f"⚡️ **СИГНАЛ ПО СТРАТЕГИИ**\n\n"
-                               f"• Монета: **{symbol.replace('USDT','')}**\n"
-                               f"• Сигнал: **{signal}**\n"
-                               f"• Цена: `{curr_p}`\n"
-                               f"• RSI: `{rsi:.1f}`")
+                        sym_name = symbol.replace('USDT', '')
+                        msg = (
+                            f"⚡️ **ТОРГОВЫЙ СИГНАЛ: {sym_name}**\n\n"
+                            f"• Направление: **{signal} (Откат по тренду)**\n"
+                            f"• Таймфрейм: `15m`\n\n"
+                            f"📍 **Точка входа:** `{entry:.4f}`\n"
+                            f"🛑 **Стоп-лосс (SL):** `{sl:.4f}`\n"
+                            f"🎯 **Тейк-профит 1 (TP1):** `{tp1:.4f}`\n"
+                            f"🎯 **Тейк-профит 2 (TP2):** `{tp2:.4f}`\n\n"
+                            f"📊 **Индикаторы:** RSI = `{rsi:.1f}` | ATR = `{atr:.4f}`"
+                        )
                         broadcast(msg)
                 time.sleep(2)
             time.sleep(300)
@@ -163,14 +173,14 @@ def bot_engine():
                     }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Считаю реальные сделки по RSI и тренду...", keyboard)
+                        send_msg(chat_id, "⏳ Считаю статистику...", keyboard)
                         report = calculate_profitable_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
                         welcome_text = (
-                            "👋 **Торговый терминал (Трендовый откат)**\n\n"
-                            "Бот отслеживает тренды и находит точки входа по RSI.\n\n"
-                            "Нажми кнопку ниже, чтобы проверить статистику сделок:"
+                            "👋 **Торговый терминал активен**\n\n"
+                            "Бот автоматически отслеживает тренды, считает риски и присылает готовые сигналы в этот чат.\n\n"
+                            "Нажми кнопку ниже для проверки статистики:"
                         )
                         send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
