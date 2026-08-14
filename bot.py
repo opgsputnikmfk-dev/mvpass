@@ -33,9 +33,9 @@ def run_web():
     app.run(host='0.0.0.0', port=port)
 
 # --- ПАРАМЕТРЫ QUANT-МОДЕЛИ ---
-INTERVAL = "1h"
-HISTORY_LIMIT = 300
-SCAN_INTERVAL = 3600
+INTERVAL = "15m"          # Таймфрейм свечей (15 минут)
+HISTORY_LIMIT = 300       # Количество свечей для анализа
+SCAN_INTERVAL = 900       # Пауза между сканированиями (900 секунд = 15 минут)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", 
            "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "MATICUSDT", "SHIBUSDT", 
@@ -176,7 +176,7 @@ def broadcast_message(text):
         send_telegram_message(chat_id, text)
 
 def auto_scanner():
-    print("📡 Quant-Радар запущен. Сканирование 3 Сигм каждые 60 мин...")
+    print("📡 Quant-Радар запущен. Сканирование 3 Сигм каждые 15 мин...")
     while True:
         if not subscribed_users:
             time.sleep(10)
@@ -229,7 +229,7 @@ def main():
     last_update_id = 0
     keyboard = {
         "inline_keyboard": [
-            [{"text": "📊 Математический Бэктест (12 дней)", "callback_data": "BACKTEST_QUANT"}]
+            [{"text": "📊 Математический Бэктест (15м)", "callback_data": "BACKTEST_QUANT"}]
         ]
     }
     
@@ -247,7 +247,7 @@ def main():
                     chat_id = u["message"]["chat"]["id"]
                     if chat_id not in subscribed_users:
                         subscribed_users.add(chat_id)
-                        send_telegram_message(chat_id, "✅ Доступ к Quant-радару открыт. Бот сканирует 15 монет на отклонения 3 Sigma + ADX. Ожидайте автоматических сигналов с WinRate 80%+", keyboard)
+                        send_telegram_message(chat_id, "✅ Доступ к Quant-радару открыт. Бот сканирует 15 монет на отклонения 3 Sigma + ADX. Ожидайте автоматических сигналов.", keyboard)
                     else:
                         send_telegram_message(chat_id, "🤖 Главное Quant-меню:", keyboard)
                         
@@ -256,7 +256,7 @@ def main():
                     chat_id = q["message"]["chat"]["id"]
                     
                     if q["data"] == "BACKTEST_QUANT":
-                        send_telegram_message(chat_id, "⏳ Рассчитываю теорию вероятностей по 15 монетам (глубина 12 дней). Ожидайте...", keyboard)
+                        send_telegram_message(chat_id, "⏳ Рассчитываю статистику 3σ по 15 монетам (таймфрейм 15 минут). Ожидайте...", keyboard)
                         
                         t_all, w_all = 0, 0
                         details = ""
@@ -274,13 +274,13 @@ def main():
                         
                         if t_all > 0:
                             wr_all = (w_all / t_all) * 100
-                            msg = (f"📊 СТАТИСТИКА 3σ + ADX (12 дней)\n\n"
+                            msg = (f"📊 СТАТИСТИКА 3σ + ADX (15м график)\n\n"
                                    f"{details}\n"
                                    f"📈 ИТОГО АНОМАЛИЙ: {t_all}\n"
                                    f"✅ ОТРАБОТКА: {w_all}\n"
                                    f"🏆 WINRATE ПОРТФЕЛЯ: {wr_all:.1f}%")
                         else:
-                            msg = "📉 За последние 12 дней рынок не выходил за пределы 3 стандартных отклонений при низком ADX. Сигналов не было."
+                            msg = "📉 На истории текущего 15-минутного графика аномалий не найдено."
                             
                         send_telegram_message(chat_id, msg, keyboard)
         except: time.sleep(3)
