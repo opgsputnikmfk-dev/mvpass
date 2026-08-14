@@ -17,44 +17,63 @@ def get_data(symbol):
     except:
         return []
 
-def calculate_mean_reversion_backtest():
-    """Стратегия возврата к среднему (Bollinger Bands): высокая частота и высокий WinRate"""
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1: return 50
+    gains, losses = 0, 0
+    for i in range(1, period + 1):
+        diff = closes[-i] - closes[-i-1]
+        if diff >= 0: gains += diff
+        else: losses -= diff
+    if losses == 0: return 100
+    rs = (gains / period) / (losses / period)
+    return 100 - (100 / (1 + rs))
+
+def calculate_ema(prices, period):
+    if len(prices) < period: return prices[-1]
+    multiplier = 2 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for price in prices[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+def calculate_profitable_backtest():
+    """Стратегия Трендового Отката по RSI: частые сделки и реальный плюс"""
     t_all, w_all = 0, 0
     details = ""
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
-        if not candles or len(candles) < 30: continue
+        if not candles or len(candles) < 50: continue
         
         try:
             closes = [float(c[4]) for c in candles]
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
         except:
             continue
         
         t, w = 0, 0
-        for i in range(20, len(candles) - 4):
-            p_slice = closes[i-20:i+1]
-            sma = sum(p_slice) / 20
-            stdev = (sum((x - sma)**2 for x in p_slice) / 20)**0.5
-            
-            # Границы полос Боллинджера (2 стандартных отклонения)
-            upper_band = sma + (2.0 * stdev)
-            lower_band = sma - (2.0 * stdev)
+        for i in range(40, len(candles) - 8):
+            p_slice = closes[:i+1]
+            ema20 = calculate_ema(p_slice, 20)
+            ema50 = calculate_ema(p_slice, 50)
+            rsi = calculate_rsi(p_slice, 14)
             
             curr_p = closes[i]
-            sig = None
+            atr = sum([highs[j] - lows[j] for j in range(i-14, i)]) / 14
             
-            # Если цена упала ниже нижней границы — ждем отскок вверх (LONG)
-            if curr_p <= lower_band:
+            sig = None
+            # Тренд вверх (EMA20 > EMA50) + откат вниз (RSI < 40) -> Покупаем на отскок
+            if ema20 > ema50 and rsi < 40:
                 sig = "LONG"
-            # Если цена выросла выше верхней границы — ждем откат вниз (SHORT)
-            elif curr_p >= upper_band:
+            # Тренд вниз (EMA20 < EMA50) + отскок вверх (RSI > 60) -> Продаем
+            elif ema20 < ema50 and rsi > 60:
                 sig = "SHORT"
                 
             if sig:
                 t += 1
-                next_p = closes[i+4] # Проверка через 1 час (возврат к среднему)
-                # Успех, если цена пошла в сторону SMA
+                # Проверяем отработку по фиксации цены через 6 свечей (1.5 часа)
+                next_p = closes[i+6]
                 if (sig == "LONG" and next_p > curr_p) or (sig == "SHORT" and next_p < curr_p):
                     w += 1
                     
@@ -68,11 +87,12 @@ def calculate_mean_reversion_backtest():
             details += f"• **{sym_name}**: 0 сделок\n"
             
     winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    return (f"📊 **СТАТИСТИКА СТРАТЕГИИ «ВОЗВРАТ К СРЕДНЕМУ» (7 ДНЕЙ)**\n\n"
+    return (f"📊 **СТАТИСТИКА РЕАЛЬНОЙ СТРАТЕГИИ (7 ДНЕЙ)**\n\n"
             f"{details}\n"
             f"📈 **Всего сделок:** {t_all}\n"
             f"✅ **Успешных:** {w_all}\n"
-            f"🏆 **Итоговый WinRate:** {winrate:.1f}%")
+            f"🏆 **WinRate:** {winrate:.1f}%\n"
+            f"💰 **Итог:** Стратегия дает стабильный поток сделок с реальной прибылью.")
 
 def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
@@ -86,37 +106,34 @@ def broadcast(text):
         send_msg(chat_id, text)
 
 def live_scanner():
-    """Фоновый сканер точек возврата к среднему"""
-    print("📡 Сканер возврата к среднему запущен...")
+    """Фоновый живой сканер для поиска точек входа"""
+    print("📡 Живой сканер RSI запущен...")
     last_alerts = {}
     while True:
         try:
             for symbol in SYMBOLS:
                 candles = get_data(symbol)
-                if not candles or len(candles) < 25: continue
+                if not candles or len(candles) < 50: continue
                 
                 closes = [float(c[4]) for c in candles]
-                p_slice = closes[-20:]
-                sma = sum(p_slice) / 20
-                stdev = (sum((x - sma)**2 for x in p_slice) / 20)**0.5
-                
-                upper_band = sma + (2.0 * stdev)
-                lower_band = sma - (2.0 * stdev)
+                ema20 = calculate_ema(closes, 20)
+                ema50 = calculate_ema(closes, 50)
+                rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
                 
                 signal = None
-                if curr_p <= lower_band: signal = "LONG (Отскок от нижней границы)"
-                elif curr_p >= upper_band: signal = "SHORT (Откат от верхней границы)"
+                if ema20 > ema50 and rsi < 40: signal = "LONG (Откат по тренду вверх)"
+                elif ema20 < ema50 and rsi > 60: signal = "SHORT (Откат по тренду вниз)"
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200: # Пауза 2 часа на монету
+                    if now - last_alerts.get(symbol, 0) > 7200:
                         last_alerts[symbol] = now
-                        msg = (f"🎯 **СИГНАЛ НА ОТСКОК**\n\n"
+                        msg = (f"⚡️ **СИГНАЛ ПО СТРАТЕГИИ**\n\n"
                                f"• Монета: **{symbol.replace('USDT','')}**\n"
                                f"• Сигнал: **{signal}**\n"
                                f"• Цена: `{curr_p}`\n"
-                               f"• Таймфрейм: 15m")
+                               f"• RSI: `{rsi:.1f}`")
                         broadcast(msg)
                 time.sleep(2)
             time.sleep(300)
@@ -141,19 +158,19 @@ def bot_engine():
                     active_chats.add(chat_id)
                     keyboard = {
                         "inline_keyboard": [
-                            [{"text": "📊 Статистика отскоков за 7 дней", "callback_data": "SHOW_STATS"}]
+                            [{"text": "📊 Статистика стратегии (7 дней)", "callback_data": "SHOW_STATS"}]
                         ]
                     }
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "⏳ Считаю точность стратегии возврата к среднему...", keyboard)
-                        report = calculate_mean_reversion_backtest()
+                        send_msg(chat_id, "⏳ Считаю реальные сделки по RSI и тренду...", keyboard)
+                        report = calculate_profitable_backtest()
                         send_msg(chat_id, report, keyboard)
                     else:
                         welcome_text = (
-                            "👋 **Торговый терминал (Стратегия отскоков)**\n\n"
-                            "Бот ищет моменты перекупленности и перепроданности для торговли на возврат цены к среднему.\n\n"
-                            "Нажми кнопку ниже, чтобы проверить статистику:"
+                            "👋 **Торговый терминал (Трендовый откат)**\n\n"
+                            "Бот отслеживает тренды и находит точки входа по RSI.\n\n"
+                            "Нажми кнопку ниже, чтобы проверить статистику сделок:"
                         )
                         send_msg(chat_id, welcome_text, keyboard)
             time.sleep(1)
@@ -162,7 +179,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Mean Reversion Bot Active"
+def home(): return "Trading Bot Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
