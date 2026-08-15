@@ -50,6 +50,7 @@ def calculate_terminal_backtest():
             closes = [float(c[4]) for c in candles]
             highs = [float(c[2]) for c in candles]
             lows = [float(c[3]) for c in candles]
+            opens = [float(c[1]) for c in candles]
         except:
             continue
         
@@ -61,23 +62,24 @@ def calculate_terminal_backtest():
             
             ema20 = calculate_ema(p_slice, 20)
             ema50 = calculate_ema(p_slice, 50)
+            rsi = calculate_rsi(p_slice, 14)
             curr_p = closes[i]
-            prev_p = closes[i-1]
+            open_p = opens[i]
             
             atr = sum([h_slice[j] - l_slice[j] for j in range(-14, 0)]) / 14
             
             sig = None
-            # Пробой локального диапазона по тренду с подтверждением волатильности
-            if ema20 > ema50 and curr_p > max(h_slice[-5:-1]):
+            # Жесткий фильтр: пробой с подтверждением телом свечи и фильтрацией RSI
+            if ema20 > ema50 and curr_p > max(h_slice[-8:-1]) and curr_p > open_p and rsi < 65:
                 sig = "LONG"
                 entry = curr_p
-                sl = entry - (atr * 1.5)
-                tp = entry + (atr * 2.5)
-            elif ema20 < ema50 and curr_p < min(l_slice[-5:-1]):
+                sl = entry - (atr * 1.2)
+                tp = entry + (atr * 2.0)
+            elif ema20 < ema50 and curr_p < min(l_slice[-8:-1]) and curr_p < open_p and rsi > 35:
                 sig = "SHORT"
                 entry = curr_p
-                sl = entry + (atr * 1.5)
-                tp = entry - (atr * 2.5)
+                sl = entry + (atr * 1.2)
+                tp = entry - (atr * 2.0)
                 
             if sig:
                 t += 1
@@ -110,7 +112,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        "=== PRO BREAKOUT BACKTEST (7D) ===\n"
+        "=== ELITE BREAKOUT BACKTEST (7D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -144,7 +146,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print("Pro Breakout Scanner Online...")
+    print("Elite Scanner Online...")
     last_alerts = {}
     while True:
         try:
@@ -155,26 +157,29 @@ def live_scanner():
                 closes = [float(c[4]) for c in candles]
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
+                opens = [float(c[1]) for c in candles]
                 
                 ema20 = calculate_ema(closes, 20)
                 ema50 = calculate_ema(closes, 50)
+                rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
+                open_p = opens[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if ema20 > ema50 and curr_p > max(highs[-6:-1]):
+                if ema20 > ema50 and curr_p > max(highs[-9:-1]) and curr_p > open_p and rsi < 65:
                     signal = "LONG"
                     entry = curr_p
-                    sl = entry - (atr * 1.5)
-                    tp1 = entry + (atr * 2.5)
-                    tp2 = entry + (atr * 4.0)
-                elif ema20 < ema50 and curr_p < min(lows[-6:-1]):
+                    sl = entry - (atr * 1.2)
+                    tp1 = entry + (atr * 2.0)
+                    tp2 = entry + (atr * 3.5)
+                elif ema20 < ema50 and curr_p < min(lows[-9:-1]) and curr_p < open_p and rsi > 35:
                     signal = "SHORT"
                     entry = curr_p
-                    sl = entry + (atr * 1.5)
-                    tp1 = entry - (atr * 2.5)
-                    tp2 = entry - (atr * 4.0)
+                    sl = entry + (atr * 1.2)
+                    tp1 = entry - (atr * 2.0)
+                    tp2 = entry - (atr * 3.5)
                 
                 if signal:
                     now = time.time()
@@ -184,7 +189,7 @@ def live_scanner():
                         
                         msg = (
                             "```text\n"
-                            f"[BREAKOUT ALERT] // {sym_name}USDT\n"
+                            f"[ELITE ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  15m\n"
@@ -193,7 +198,7 @@ def live_scanner():
                             f"TAKE-PROFIT 1: {tp1:.4f}\n"
                             f"TAKE-PROFIT 2: {tp2:.4f}\n"
                             "---------------------------------\n"
-                            f"ATR: {atr:.4f}\n"
+                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
@@ -206,7 +211,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Pro Breakout Bot Engine Online...")
+    print("Elite Bot Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -221,7 +226,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing breakout analytics...", get_main_keyboard())
+                        send_msg(chat_id, "Processing elite analytics...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -240,7 +245,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"TIMEFRAME: 15m (Volatility Breakout)\n"
+                            f"TIMEFRAME: 15m (Elite Filtered)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -249,9 +254,9 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "1. SYSTEM STATS: 7-day Breakout backtest.\n"
+                            "1. SYSTEM STATS: 7-day Elite backtest.\n"
                             "2. ASSETS: List of tracked pairs.\n"
-                            "3. SIGNALS: 15m Trend Breakouts.\n"
+                            "3. SIGNALS: Filtered 15m Breakouts.\n"
                             "   Includes Entry, SL, TP1, and TP2.\n"
                             "```"
                         )
@@ -260,7 +265,7 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "TRADING TERMINAL v5.0 ACTIVE\n"
+                            "TRADING TERMINAL v6.0 ACTIVE\n"
                             "---------------------------------\n"
                             "Select an option from the menu below:\n"
                             "```"
