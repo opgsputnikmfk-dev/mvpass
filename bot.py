@@ -48,30 +48,59 @@ def calculate_terminal_backtest():
         
         try:
             closes = [float(c[4]) for c in candles]
-            opens = [float(c[1]) for c in candles]
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
         except:
             continue
         
         t, w = 0, 0
-        for i in range(40, len(candles) - 8):
+        for i in range(40, len(candles) - 16):
             p_slice = closes[:i+1]
             ema20 = calculate_ema(p_slice, 20)
             ema50 = calculate_ema(p_slice, 50)
             rsi = calculate_rsi(p_slice, 14)
             
             curr_p = closes[i]
-            open_p = opens[i]
+            
+            # Расчет ATR для исторических баров
+            h_slice = highs[i-14:i+1]
+            l_slice = lows[i-14:i+1]
+            atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
             
             sig = None
-            if ema20 > ema50 and rsi < 42 and curr_p > open_p: 
+            if ema20 > ema50 and rsi < 38: 
                 sig = "LONG"
-            elif ema20 < ema50 and rsi > 58 and curr_p < open_p: 
+                entry = curr_p
+                sl = entry - (atr * 1.0)
+                tp = entry + (atr * 1.2)
+            elif ema20 < ema50 and rsi > 62: 
                 sig = "SHORT"
+                entry = curr_p
+                sl = entry + (atr * 1.0)
+                tp = entry - (atr * 1.2)
                 
             if sig:
                 t += 1
-                next_p = closes[i+6]
-                if (sig == "LONG" and next_p > curr_p) or (sig == "SHORT" and next_p < curr_p):
+                # Проверяем следующие 12 свечей (3 часа) на предмет того, что сработало раньше: TP или SL
+                hit = False
+                for j in range(1, 13):
+                    if i + j >= len(candles): break
+                    h_future = highs[i+j]
+                    l_future = lows[i+j]
+                    
+                    if sig == "LONG":
+                        if l_future <= sl: # Сначала зацепило стоп
+                            break
+                        if h_future >= tp: # Сначала зацепило тейк
+                            hit = True
+                            break
+                    else: # SHORT
+                        if h_future >= sl: # Сначала зацепило стоп
+                            break
+                        if l_future <= tp: # Сначала зацепило тейк
+                            hit = True
+                            break
+                if hit:
                     w += 1
                     
         t_all += t
@@ -127,7 +156,6 @@ def live_scanner():
                 if not candles or len(candles) < 50: continue
                 
                 closes = [float(c[4]) for c in candles]
-                opens = [float(c[1]) for c in candles]
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
                 
@@ -135,23 +163,22 @@ def live_scanner():
                 ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
-                open_p = opens[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if ema20 > ema50 and rsi < 42 and curr_p > open_p:
+                if ema20 > ema50 and rsi < 38:
                     signal = "LONG"
                     entry = curr_p
-                    sl = entry - (atr * 1.2)
-                    tp1 = entry + (atr * 1.5)
-                    tp2 = entry + (atr * 3.0)
-                elif ema20 < ema50 and rsi > 58 and curr_p < open_p:
+                    sl = entry - (atr * 1.0)
+                    tp1 = entry + (atr * 1.2)
+                    tp2 = entry + (atr * 2.4)
+                elif ema20 < ema50 and rsi > 62:
                     signal = "SHORT"
                     entry = curr_p
-                    sl = entry + (atr * 1.2)
-                    tp1 = entry - (atr * 1.5)
-                    tp2 = entry - (atr * 3.0)
+                    sl = entry + (atr * 1.0)
+                    tp1 = entry - (atr * 1.2)
+                    tp2 = entry - (atr * 2.4)
                 
                 if signal:
                     now = time.time()
@@ -237,7 +264,7 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "TRADING TERMINAL v2.2 ACTIVE\n"
+                            "TRADING TERMINAL v2.3 ACTIVE\n"
                             "---------------------------------\n"
                             "Select an option from the menu below:\n"
                             "```"
