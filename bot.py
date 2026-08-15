@@ -50,7 +50,6 @@ def calculate_terminal_backtest():
             closes = [float(c[4]) for c in candles]
             highs = [float(c[2]) for c in candles]
             lows = [float(c[3]) for c in candles]
-            opens = [float(c[1]) for c in candles]
         except:
             continue
         
@@ -60,30 +59,30 @@ def calculate_terminal_backtest():
             h_slice = highs[:i+1]
             l_slice = lows[:i+1]
             
+            ema20 = calculate_ema(p_slice, 20)
             ema50 = calculate_ema(p_slice, 50)
-            rsi = calculate_rsi(p_slice, 14)
             curr_p = closes[i]
-            open_p = opens[i]
+            prev_p = closes[i-1]
             
             atr = sum([h_slice[j] - l_slice[j] for j in range(-14, 0)]) / 14
             
             sig = None
-            # Институциональная модель: отскок от экстремумов RSI с подтверждением телом свечи
-            if rsi < 28 and curr_p > open_p and curr_p > ema50:
+            # Пробой локального диапазона по тренду с подтверждением волатильности
+            if ema20 > ema50 and curr_p > max(h_slice[-5:-1]):
                 sig = "LONG"
                 entry = curr_p
-                sl = entry - (atr * 0.9)
-                tp = entry + (atr * 1.3)
-            elif rsi > 72 and curr_p < open_p and curr_p < ema50:
+                sl = entry - (atr * 1.5)
+                tp = entry + (atr * 2.5)
+            elif ema20 < ema50 and curr_p < min(l_slice[-5:-1]):
                 sig = "SHORT"
                 entry = curr_p
-                sl = entry + (atr * 0.9)
-                tp = entry - (atr * 1.3)
+                sl = entry + (atr * 1.5)
+                tp = entry - (atr * 2.5)
                 
             if sig:
                 t += 1
                 hit = False
-                for j in range(1, 10):
+                for j in range(1, 12):
                     if i + j >= len(candles): break
                     h_f = highs[i+j]
                     l_f = lows[i+j]
@@ -111,7 +110,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        "=== QUANT REVERSION BACKTEST (7D) ===\n"
+        "=== PRO BREAKOUT BACKTEST (7D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -145,7 +144,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print("Quant Reversion Scanner Online...")
+    print("Pro Breakout Scanner Online...")
     last_alerts = {}
     while True:
         try:
@@ -156,28 +155,26 @@ def live_scanner():
                 closes = [float(c[4]) for c in candles]
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
-                opens = [float(c[1]) for c in candles]
                 
+                ema20 = calculate_ema(closes, 20)
                 ema50 = calculate_ema(closes, 50)
-                rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
-                open_p = opens[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if rsi < 28 and curr_p > open_p and curr_p > ema50:
+                if ema20 > ema50 and curr_p > max(highs[-6:-1]):
                     signal = "LONG"
                     entry = curr_p
-                    sl = entry - (atr * 0.9)
-                    tp1 = entry + (atr * 1.3)
-                    tp2 = entry + (atr * 2.5)
-                elif rsi > 72 and curr_p < open_p and curr_p < ema50:
+                    sl = entry - (atr * 1.5)
+                    tp1 = entry + (atr * 2.5)
+                    tp2 = entry + (atr * 4.0)
+                elif ema20 < ema50 and curr_p < min(lows[-6:-1]):
                     signal = "SHORT"
                     entry = curr_p
-                    sl = entry + (atr * 0.9)
-                    tp1 = entry - (atr * 1.3)
-                    tp2 = entry - (atr * 2.5)
+                    sl = entry + (atr * 1.5)
+                    tp1 = entry - (atr * 2.5)
+                    tp2 = entry - (atr * 4.0)
                 
                 if signal:
                     now = time.time()
@@ -187,7 +184,7 @@ def live_scanner():
                         
                         msg = (
                             "```text\n"
-                            f"[QUANT ALERT] // {sym_name}USDT\n"
+                            f"[BREAKOUT ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  15m\n"
@@ -196,7 +193,7 @@ def live_scanner():
                             f"TAKE-PROFIT 1: {tp1:.4f}\n"
                             f"TAKE-PROFIT 2: {tp2:.4f}\n"
                             "---------------------------------\n"
-                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
+                            f"ATR: {atr:.4f}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
@@ -209,7 +206,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Quant Bot Engine Online...")
+    print("Pro Breakout Bot Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -224,7 +221,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing quant analytics...", get_main_keyboard())
+                        send_msg(chat_id, "Processing breakout analytics...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -243,7 +240,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"TIMEFRAME: 15m (Quant Reversion)\n"
+                            f"TIMEFRAME: 15m (Volatility Breakout)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -252,9 +249,9 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "1. SYSTEM STATS: 7-day Reversion backtest.\n"
+                            "1. SYSTEM STATS: 7-day Breakout backtest.\n"
                             "2. ASSETS: List of tracked pairs.\n"
-                            "3. SIGNALS: Extreme RSI & EMA filter.\n"
+                            "3. SIGNALS: 15m Trend Breakouts.\n"
                             "   Includes Entry, SL, TP1, and TP2.\n"
                             "```"
                         )
@@ -263,7 +260,7 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "TRADING TERMINAL v4.0 ACTIVE\n"
+                            "TRADING TERMINAL v5.0 ACTIVE\n"
                             "---------------------------------\n"
                             "Select an option from the menu below:\n"
                             "```"
