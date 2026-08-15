@@ -66,18 +66,16 @@ def calculate_terminal_backtest():
             
             curr_p = closes[i]
             
-            # Расчет ATR для стопов
             h_slice = highs[i-14:i+1]
             l_slice = lows[i-14:i+1]
             atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
             
             sig = None
-            # Стратегия экстремального возврата: откуп паники за границами 2.5 SD
             if curr_p < lower_bb and rsi < 30: 
                 sig = "LONG"
                 entry = curr_p
-                sl = entry - (atr * 2.0) # Широкий защитный стоп
-                tp = entry + (atr * 1.0) # Близкий, очень вероятный тейк-профит
+                sl = entry - (atr * 2.0)
+                tp = entry + (atr * 1.0)
             elif curr_p > upper_bb and rsi > 70: 
                 sig = "SHORT"
                 entry = curr_p
@@ -87,14 +85,12 @@ def calculate_terminal_backtest():
             if sig:
                 t += 1
                 hit = False
-                # Ждем отработки сигнала до 24 часов
                 for j in range(1, 25):
                     if i + j >= len(candles): break
                     h_f = highs[i+j]
                     l_f = lows[i+j]
                     
                     if sig == "LONG":
-                        # Если свеча задела стоп - считаем убыток сразу (жесткая проверка)
                         if l_f <= sl: break
                         if h_f >= tp:
                             hit = True
@@ -117,7 +113,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        f"=== HIGH-WINRATE ARBITRAGE (14D) ===\n"
+        f"=== STATISTICAL ARBITRAGE (14D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -132,10 +128,11 @@ def calculate_terminal_backtest():
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📊 SYSTEM STATS (WINRATE)", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 SYSTEM STATS (14D)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
-            [{"text": "ℹ️ HELP & INFO", "callback_data": "SHOW_HELP"}]
+            [{"text": "🧠 STRATEGY INFO", "callback_data": "SHOW_STRATEGY"},
+             {"text": "ℹ️ HELP", "callback_data": "SHOW_HELP"}]
         ]
     }
 
@@ -183,7 +180,7 @@ def live_scanner():
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 43200: # 12 часов задержки на монету
+                    if now - last_alerts.get(symbol, 0) > 43200:
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
@@ -249,14 +246,34 @@ def bot_engine():
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
                         
+                    elif data == "SHOW_STRATEGY":
+                        msg = (
+                            "```text\n"
+                            "=== TRADING MODEL: BOLLINGER PANIC FADE ===\n"
+                            "TYPE: Mean Reversion (Statistical Arbitrage)\n"
+                            "TIMEFRAME: 1h\n"
+                            "---------------------------------\n"
+                            "[ LOGIC ]\n"
+                            "The algorithm acts as a liquidity provider. It does not chase trends. It waits for extreme market panic or euphoria and enters on the mathematical reversion to the mean.\n\n"
+                            "[ FILTERS & INDICATORS ]\n"
+                            "1. Bollinger Bands (20, 2.5 SD): Tracks 99% of normal price action. Entry triggers ONLY when price breaks out of the 2.5 standard deviation boundary.\n"
+                            "2. RSI (14): Confirms extreme momentum (RSI < 30 for Long, RSI > 70 for Short).\n"
+                            "3. ATR (14): Calculates dynamic volatility targets.\n\n"
+                            "[ RISK MANAGEMENT ]\n"
+                            "- Take-Profit: 1 ATR (Close target for 80%+ winrate)\n"
+                            "- Stop-Loss: 2 ATR (Wide stop to survive volatility spikes)\n"
+                            "```"
+                        )
+                        send_msg(chat_id, msg, get_main_keyboard())
+                        
                     elif data == "SHOW_HELP":
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "High Win-Rate Arbitrage logic:\n"
-                            "- Enters on 2.5 Std Dev panic/euphoria\n"
-                            "- Uses tight Take-Profit for high win%\n"
-                            "- Validated by RSI extremes\n"
+                            "1. SYSTEM STATS: 14-day Backtest report.\n"
+                            "2. ASSETS: List of tracked pairs.\n"
+                            "3. STRATEGY INFO: Logic and risk management.\n"
+                            "4. SIGNALS: Automatic 1h extreme alerts.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -266,7 +283,7 @@ def bot_engine():
                             "```text\n"
                             "WALL STREET QUANT TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "Select an option from the menu below:\n"
+                            "System initialized. Awaiting market anomalies...\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
