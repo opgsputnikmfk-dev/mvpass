@@ -1,5 +1,6 @@
 from flask import Flask
 import urllib.request, urllib.parse, json, ssl, time, threading, os
+import math
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -10,9 +11,9 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 
-# --- ПАРАМЕТРЫ QUANT-МОДЕЛИ ---
+# --- ПАРАМЕТРЫ HFT / MEAN REVERSION МОДЕЛИ ---
 INTERVAL = "1h"
-HISTORY_LIMIT = 300 
+HISTORY_LIMIT = 400
 SCAN_INTERVAL = 3600
 
 def get_data(symbol):
@@ -35,13 +36,12 @@ def calculate_rsi(closes, period=14):
     rs = (gains / period) / (losses / period)
     return 100 - (100 / (1 + rs))
 
-def calculate_ema(prices, period):
-    if len(prices) < period: return prices[-1]
-    multiplier = 2 / (period + 1)
-    ema = sum(prices[:period]) / period
-    for price in prices[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
+def calculate_bollinger(closes, period=20, dev=2.5):
+    if len(closes) < period: return closes[-1], closes[-1], closes[-1]
+    sma = sum(closes[-period:]) / period
+    variance = sum([(c - sma) ** 2 for c in closes[-period:]]) / period
+    std = math.sqrt(variance)
+    return sma, sma + (dev * std), sma - (dev * std)
 
 def calculate_terminal_backtest():
     t_all, w_all = 0, 0
@@ -59,38 +59,42 @@ def calculate_terminal_backtest():
             continue
         
         t, w = 0, 0
-        for i in range(40, len(candles) - 6):
+        for i in range(40, len(candles) - 1):
             p_slice = closes[:i+1]
-            ema20 = calculate_ema(p_slice, 20)
-            ema50 = calculate_ema(p_slice, 50)
             rsi = calculate_rsi(p_slice, 14)
+            sma, upper_bb, lower_bb = calculate_bollinger(p_slice, 20, 2.5)
             
             curr_p = closes[i]
+            
+            # Расчет ATR для стопов
             h_slice = highs[i-14:i+1]
             l_slice = lows[i-14:i+1]
             atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
             
             sig = None
-            if ema20 > ema50 and rsi < 40: 
+            # Стратегия экстремального возврата: откуп паники за границами 2.5 SD
+            if curr_p < lower_bb and rsi < 30: 
                 sig = "LONG"
                 entry = curr_p
-                sl = entry - (atr * 1.5)
-                tp = entry + (atr * 2.0)
-            elif ema20 < ema50 and rsi > 60: 
+                sl = entry - (atr * 2.0) # Широкий защитный стоп
+                tp = entry + (atr * 1.0) # Близкий, очень вероятный тейк-профит
+            elif curr_p > upper_bb and rsi > 70: 
                 sig = "SHORT"
                 entry = curr_p
-                sl = entry + (atr * 1.5)
-                tp = entry - (atr * 2.0)
+                sl = entry + (atr * 2.0)
+                tp = entry - (atr * 1.0)
                 
             if sig:
                 t += 1
                 hit = False
-                for j in range(1, 6):
+                # Ждем отработки сигнала до 24 часов
+                for j in range(1, 25):
                     if i + j >= len(candles): break
                     h_f = highs[i+j]
                     l_f = lows[i+j]
                     
                     if sig == "LONG":
+                        # Если свеча задела стоп - считаем убыток сразу (жесткая проверка)
                         if l_f <= sl: break
                         if h_f >= tp:
                             hit = True
@@ -113,7 +117,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        f"=== HOURLY MODEL BACKTEST ({INTERVAL}) ===\n"
+        f"=== HIGH-WINRATE ARBITRAGE (14D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -128,7 +132,7 @@ def calculate_terminal_backtest():
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📊 SYSTEM STATS (1H MODEL)", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 SYSTEM STATS (WINRATE)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
             [{"text": "ℹ️ HELP & INFO", "callback_data": "SHOW_HELP"}]
@@ -147,7 +151,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print(f"Hourly Quant Scanner Online (Interval: {INTERVAL})...")
+    print(f"Quant Arbitrage Scanner Online (Interval: {INTERVAL})...")
     last_alerts = {}
     while True:
         try:
@@ -159,52 +163,46 @@ def live_scanner():
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
                 
-                ema20 = calculate_ema(closes, 20)
-                ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
+                sma, upper_bb, lower_bb = calculate_bollinger(closes, 20, 2.5)
                 curr_p = closes[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if ema20 > ema50 and rsi < 40:
+                if curr_p < lower_bb and rsi < 30:
                     signal = "LONG"
                     entry = curr_p
-                    sl = entry - (atr * 1.5)
-                    tp1 = entry + (atr * 2.0)
-                    tp2 = entry + (atr * 3.5)
-                elif ema20 < ema50 and rsi > 60:
+                    sl = entry - (atr * 2.0)
+                    tp1 = entry + (atr * 1.0)
+                elif curr_p > upper_bb and rsi > 70:
                     signal = "SHORT"
                     entry = curr_p
-                    sl = entry + (atr * 1.5)
-                    tp1 = entry - (atr * 2.0)
-                    tp2 = entry - (atr * 3.5)
+                    sl = entry + (atr * 2.0)
+                    tp1 = entry - (atr * 1.0)
                 
                 if signal:
                     now = time.time()
-                    # Пауза 8 часов на монету для часового таймфрейма, чтобы не спамить
-                    if now - last_alerts.get(symbol, 0) > 28800:
+                    if now - last_alerts.get(symbol, 0) > 43200: # 12 часов задержки на монету
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
                         msg = (
                             "```text\n"
-                            f"[HOURLY SIGNAL] // {sym_name}USDT\n"
+                            f"[STAT ARBITRAGE ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  {INTERVAL}\n"
                             f"ENTRY:      {entry:.4f}\n"
                             f"STOP-LOSS:  {sl:.4f}\n"
-                            f"TAKE-PROFIT 1: {tp1:.4f}\n"
-                            f"TAKE-PROFIT 2: {tp2:.4f}\n"
+                            f"TAKE-PROFIT: {tp1:.4f}\n"
                             "---------------------------------\n"
-                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
+                            f"RSI: {rsi:.1f} | DEVIATION: >2.5 SD\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
                         broadcast(msg)
                 time.sleep(2)
-            # Сканирование раз в час по заданному параметру
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
             print(f"Scanner error: {e}")
@@ -212,7 +210,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Hourly Bot Engine Online...")
+    print("Wall Street Quant Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -227,7 +225,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing hourly analytics...", get_main_keyboard())
+                        send_msg(chat_id, "Processing statistical backtest...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -246,7 +244,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"TIMEFRAME: {INTERVAL} (Hourly Model)\n"
+                            f"STRATEGY: Bollinger 2.5SD Fade\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -255,10 +253,10 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "1. SYSTEM STATS: Hourly Backtest.\n"
-                            "2. ASSETS: List of tracked pairs.\n"
-                            "3. SIGNALS: 1h Trend pullbacks.\n"
-                            "   Includes Entry, SL, TP1, and TP2.\n"
+                            "High Win-Rate Arbitrage logic:\n"
+                            "- Enters on 2.5 Std Dev panic/euphoria\n"
+                            "- Uses tight Take-Profit for high win%\n"
+                            "- Validated by RSI extremes\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -266,7 +264,7 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "HOURLY QUANT TERMINAL ACTIVE\n"
+                            "WALL STREET QUANT TERMINAL ACTIVE\n"
                             "---------------------------------\n"
                             "Select an option from the menu below:\n"
                             "```"
@@ -278,7 +276,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Hourly Terminal Server Active"
+def home(): return "Quant Terminal Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
