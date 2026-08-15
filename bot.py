@@ -38,6 +38,26 @@ def calculate_ema(prices, period):
         ema = (price - ema) * multiplier + ema
     return ema
 
+def calculate_adx(highs, lows, closes, period=14):
+    if len(closes) < period * 2: return 25
+    try:
+        tr, plus_dm, minus_dm = [], [], []
+        for i in range(1, len(closes)):
+            tr.append(max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])))
+            p_move = highs[i] - highs[i-1]
+            m_move = lows[i-1] - lows[i]
+            plus_dm.append(p_move if p_move > m_move and p_move > 0 else 0)
+            minus_dm.append(m_move if m_move > p_move and m_move > 0 else 0)
+            
+        atr_val = sum(tr[-period:]) / period
+        if atr_val == 0: return 0
+        p_di = 100 * (sum(plus_dm[-period:]) / period) / atr_val
+        m_di = 100 * (sum(minus_dm[-period:]) / period) / atr_val
+        dx = 100 * abs(p_di - m_di) / (p_di + m_di) if (p_di + m_di) > 0 else 0
+        return dx
+    except:
+        return 25
+
 def calculate_terminal_backtest():
     t_all, w_all = 0, 0
     rows = []
@@ -56,48 +76,47 @@ def calculate_terminal_backtest():
         t, w = 0, 0
         for i in range(40, len(candles) - 16):
             p_slice = closes[:i+1]
+            h_slice = highs[:i+1]
+            l_slice = lows[:i+1]
+            
             ema20 = calculate_ema(p_slice, 20)
             ema50 = calculate_ema(p_slice, 50)
             rsi = calculate_rsi(p_slice, 14)
+            adx = calculate_adx(h_slice, l_slice, p_slice, 14)
             
             curr_p = closes[i]
-            
-            # Расчет ATR для исторических баров
-            h_slice = highs[i-14:i+1]
-            l_slice = lows[i-14:i+1]
-            atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
+            atr = sum([h_slice[j] - l_slice[j] for j in range(-14, 0)]) / 14
             
             sig = None
-            if ema20 > ema50 and rsi < 38: 
-                sig = "LONG"
-                entry = curr_p
-                sl = entry - (atr * 1.0)
-                tp = entry + (atr * 1.2)
-            elif ema20 < ema50 and rsi > 62: 
-                sig = "SHORT"
-                entry = curr_p
-                sl = entry + (atr * 1.0)
-                tp = entry - (atr * 1.2)
+            # Жесткий фильтр тренда: заходим только при сильном ADX > 22
+            if adx > 22:
+                if ema20 > ema50 and rsi < 40: 
+                    sig = "LONG"
+                    entry = curr_p
+                    sl = entry - (atr * 1.2)
+                    tp = entry + (atr * 1.8)
+                elif ema20 < ema50 and rsi > 60: 
+                    sig = "SHORT"
+                    entry = curr_p
+                    sl = entry + (atr * 1.2)
+                    tp = entry - (atr * 1.8)
                 
             if sig:
                 t += 1
-                # Проверяем следующие 12 свечей (3 часа) на предмет того, что сработало раньше: TP или SL
                 hit = False
                 for j in range(1, 13):
                     if i + j >= len(candles): break
-                    h_future = highs[i+j]
-                    l_future = lows[i+j]
+                    h_f = highs[i+j]
+                    l_f = lows[i+j]
                     
                     if sig == "LONG":
-                        if l_future <= sl: # Сначала зацепило стоп
-                            break
-                        if h_future >= tp: # Сначала зацепило тейк
+                        if l_f <= sl: break
+                        if h_f >= tp:
                             hit = True
                             break
-                    else: # SHORT
-                        if h_future >= sl: # Сначала зацепило стоп
-                            break
-                        if l_future <= tp: # Сначала зацепило тейк
+                    else:
+                        if h_f >= sl: break
+                        if l_f <= tp:
                             hit = True
                             break
                 if hit:
@@ -113,7 +132,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        "=== SYSTEM BACKTEST REPORT (7D) ===\n"
+        "=== INSTITUTIONAL BACKTEST (7D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -147,7 +166,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print("Terminal Scanner Online...")
+    print("Institutional Terminal Scanner Online...")
     last_alerts = {}
     while True:
         try:
@@ -162,23 +181,25 @@ def live_scanner():
                 ema20 = calculate_ema(closes, 20)
                 ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
+                adx = calculate_adx(highs, lows, closes, 14)
                 curr_p = closes[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if ema20 > ema50 and rsi < 38:
-                    signal = "LONG"
-                    entry = curr_p
-                    sl = entry - (atr * 1.0)
-                    tp1 = entry + (atr * 1.2)
-                    tp2 = entry + (atr * 2.4)
-                elif ema20 < ema50 and rsi > 62:
-                    signal = "SHORT"
-                    entry = curr_p
-                    sl = entry + (atr * 1.0)
-                    tp1 = entry - (atr * 1.2)
-                    tp2 = entry - (atr * 2.4)
+                if adx > 22:
+                    if ema20 > ema50 and rsi < 40:
+                        signal = "LONG"
+                        entry = curr_p
+                        sl = entry - (atr * 1.2)
+                        tp1 = entry + (atr * 1.8)
+                        tp2 = entry + (atr * 3.0)
+                    elif ema20 < ema50 and rsi > 60:
+                        signal = "SHORT"
+                        entry = curr_p
+                        sl = entry + (atr * 1.2)
+                        tp1 = entry - (atr * 1.8)
+                        tp2 = entry - (atr * 3.0)
                 
                 if signal:
                     now = time.time()
@@ -188,7 +209,7 @@ def live_scanner():
                         
                         msg = (
                             "```text\n"
-                            f"[SIGNAL ALERT] // {sym_name}USDT\n"
+                            f"[INSTITUTIONAL ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  15m\n"
@@ -197,7 +218,7 @@ def live_scanner():
                             f"TAKE-PROFIT 1: {tp1:.4f}\n"
                             f"TAKE-PROFIT 2: {tp2:.4f}\n"
                             "---------------------------------\n"
-                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
+                            f"RSI: {rsi:.1f} | ADX: {adx:.1f} | ATR: {atr:.4f}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
@@ -210,7 +231,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Terminal Bot Engine Online...")
+    print("Institutional Bot Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -225,7 +246,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing analytics...", get_main_keyboard())
+                        send_msg(chat_id, "Processing institutional analytics...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -244,7 +265,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"TIMEFRAME: 15m\n"
+                            f"TIMEFRAME: 15m (ADX Filtered)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -253,9 +274,9 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "1. SYSTEM STATS: 7-day historical backtest.\n"
+                            "1. SYSTEM STATS: 7-day ADX backtest.\n"
                             "2. ASSETS: List of tracked pairs.\n"
-                            "3. SIGNALS: Real-time 15m trend pullbacks.\n"
+                            "3. SIGNALS: Filtered 15m trend pullbacks.\n"
                             "   Includes Entry, SL, TP1, and TP2.\n"
                             "```"
                         )
@@ -264,7 +285,7 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "TRADING TERMINAL v2.3 ACTIVE\n"
+                            "TRADING TERMINAL v3.0 ACTIVE\n"
                             "---------------------------------\n"
                             "Select an option from the menu below:\n"
                             "```"
