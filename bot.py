@@ -48,6 +48,7 @@ def calculate_terminal_backtest():
         
         try:
             closes = [float(c[4]) for c in candles]
+            opens = [float(c[1]) for c in candles]
         except:
             continue
         
@@ -59,9 +60,13 @@ def calculate_terminal_backtest():
             rsi = calculate_rsi(p_slice, 14)
             
             curr_p = closes[i]
+            open_p = opens[i]
+            
             sig = None
-            if ema20 > ema50 and rsi < 40: sig = "LONG"
-            elif ema20 < ema50 and rsi > 60: sig = "SHORT"
+            if ema20 > ema50 and rsi < 42 and curr_p > open_p: 
+                sig = "LONG"
+            elif ema20 < ema50 and rsi > 58 and curr_p < open_p: 
+                sig = "SHORT"
                 
             if sig:
                 t += 1
@@ -122,6 +127,7 @@ def live_scanner():
                 if not candles or len(candles) < 50: continue
                 
                 closes = [float(c[4]) for c in candles]
+                opens = [float(c[1]) for c in candles]
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
                 
@@ -129,17 +135,18 @@ def live_scanner():
                 ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
                 curr_p = closes[-1]
+                open_p = opens[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if ema20 > ema50 and rsi < 40:
+                if ema20 > ema50 and rsi < 42 and curr_p > open_p:
                     signal = "LONG"
                     entry = curr_p
                     sl = entry - (atr * 1.2)
                     tp1 = entry + (atr * 1.5)
                     tp2 = entry + (atr * 3.0)
-                elif ema20 < ema50 and rsi > 60:
+                elif ema20 < ema50 and rsi > 58 and curr_p < open_p:
                     signal = "SHORT"
                     entry = curr_p
                     sl = entry + (atr * 1.2)
