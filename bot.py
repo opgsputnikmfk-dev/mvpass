@@ -11,10 +11,10 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 
-# --- ПАРАМЕТРЫ HIGH-FREQUENCY ML ---
-INTERVAL = "15m"
-HISTORY_LIMIT = 1000
-SCAN_INTERVAL = 900 # Сканируем каждые 15 минут
+# --- ПАРАМЕТРЫ SWING AI (4H) ---
+INTERVAL = "4h"
+HISTORY_LIMIT = 1000 # Около 166 дней истории для обучения
+SCAN_INTERVAL = 3600 # Проверяем рынок раз в час, чтобы ловить закрытие 4H свечей
 NEIGHBORS = 5
 
 def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
@@ -27,9 +27,10 @@ def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
         return []
 
 def get_macro_trend():
-    btc_4h = get_data("BTCUSDT", "4h", 50)
-    if not btc_4h: return "NEUTRAL"
-    closes = [float(c[4]) for c in btc_4h]
+    # Для 4H таймфрейма глобальный поводырь — Дневной график (1D)
+    btc_1d = get_data("BTCUSDT", "1d", 50)
+    if not btc_1d: return "NEUTRAL"
+    closes = [float(c[4]) for c in btc_1d]
     sma20 = sum(closes[-20:]) / 20
     if closes[-1] > sma20: return "BULLISH"
     elif closes[-1] < sma20: return "BEARISH"
@@ -62,6 +63,7 @@ def predict_knn(candles, current_idx, atr, macro_trend):
         hist_fp = get_fingerprint(opens, highs, lows, closes, volumes, hist_i, hist_atr)
         dist = calculate_distance(current_fp, hist_fp)
         
+        # На 4H графике заглядываем в будущее на 5 свечей (20 часов вперед)
         future_move = closes[hist_i + 5] - closes[hist_i]
         outcome = 1 if future_move > hist_atr * 0.5 else (-1 if future_move < -hist_atr * 0.5 else 0)
         distances.append((dist, outcome, abs(future_move) / hist_atr))
@@ -72,19 +74,20 @@ def predict_knn(candles, current_idx, atr, macro_trend):
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
+    # Возвращаем жесткую фильтрацию: ИИ должен быть уверен
     if ups >= 3 and macro_trend != "BEARISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
         if ups == 5: conviction = "HIGH (2.0% RISK)"
         elif ups == 4: conviction = "NORMAL (1.0% RISK)"
         else: conviction = "LOW (0.5% RISK)"
-        return "LONG", max(1.2, avg_move), conviction
+        return "LONG", max(1.5, avg_move), conviction
         
     if downs >= 3 and macro_trend != "BULLISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
         if downs == 5: conviction = "HIGH (2.0% RISK)"
         elif downs == 4: conviction = "NORMAL (1.0% RISK)"
         else: conviction = "LOW (0.5% RISK)"
-        return "SHORT", max(1.2, avg_move), conviction
+        return "SHORT", max(1.5, avg_move), conviction
         
     return None, 0, ""
 
@@ -110,7 +113,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print("HF ML Scanner Online (15m)...")
+    print("Swing AI Scanner Online (4H)...")
     last_alerts = {}
     while True:
         try:
@@ -132,11 +135,13 @@ def live_scanner():
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 7200:
+                    # Запрет на повторный сигнал по монете в течение 24 часов (86400 сек)
+                    if now - last_alerts.get(symbol, 0) > 86400:
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
-                        sl_dist = atr * 1.5
+                        # Расчет уровней с запасом хода (Свинг-трейдинг)
+                        sl_dist = atr * 2.0
                         tp_dist = atr * tp_atr_mult
                         
                         if signal == "LONG":
@@ -150,16 +155,17 @@ def live_scanner():
                         
                         msg = (
                             "```text\n"
-                            f"[HF AI ALERT] // {sym_name}USDT\n"
+                            f"[SWING AI ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
-                            f"TIMEFRAME:  15m\n"
+                            f"TIMEFRAME:  4h\n"
                             f"ENTRY:      {curr_p:.4f}\n"
                             f"STOP-LOSS:  {sl:.4f}\n"
                             f"TAKE-PROFIT: {tp:.4f}\n"
                             "---------------------------------\n"
                             f"MOVE SL TO BREAK-EVEN AT: {be_point:.4f}\n"
                             "---------------------------------\n"
+                            f"BTC 1D MACRO: {macro_trend}\n"
                             f"RECOMMENDED RISK: {conviction}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
@@ -172,7 +178,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("HF ML Engine Online...")
+    print("Swing AI Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -201,7 +207,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"STRATEGY: High-Freq ML (15m)\n"
+                            f"STRATEGY: Swing AI (4H)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -209,14 +215,14 @@ def bot_engine():
                     elif data == "SHOW_STRATEGY":
                         msg = (
                             "```text\n"
-                            "=== TRADING MODEL: HIGH-FREQ ML ===\n"
-                            "TYPE: 15m Fast Execution AI\n"
+                            "=== TRADING MODEL: SWING AI ===\n"
+                            "TYPE: 4H Institutional Machine Learning\n"
                             "---------------------------------\n"
-                            "Optimized for high trade frequency by lowering pattern consensus to 60%.\n\n"
-                            "[ RISK MANAGEMENT GRADIENT ]\n"
-                            "- 5/5 Matches: HIGH (2% Risk)\n"
-                            "- 4/5 Matches: NORMAL (1% Risk)\n"
-                            "- 3/5 Matches: LOW (0.5% Risk)\n"
+                            "The bot captures large, multi-day market swings. It predicts price action by finding historical matches to current 4H candlestick fingerprints.\n\n"
+                            "[ RISK MANAGEMENT ]\n"
+                            "- Uses 1D Bitcoin Trend as a macro filter.\n"
+                            "- Stop-Loss is expanded (2.0 ATR) to survive daily volatility.\n"
+                            "- Trades take 1 to 5 days to play out.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -225,7 +231,7 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "Server load minimized. Real-time scanning active.\n"
+                            "Signals will arrive less frequently but will target larger price movements. Wait for the setup, place the trade, and step away.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -233,9 +239,9 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "HIGH-FREQ AI TERMINAL ACTIVE\n"
+                            "SWING AI TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "System initialized. Scanning 15m data...\n"
+                            "System initialized. Scanning 4H macro data...\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
@@ -245,7 +251,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "HF ML Server Active"
+def home(): return "Swing AI Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
