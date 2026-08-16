@@ -10,10 +10,11 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 
-# --- ПАРАМЕТРЫ 4H ELITE SWING ---
+# --- ПАРАМЕТРЫ ADAPTIVE 4H SWING ---
 INTERVAL = "4h"
-HISTORY_LIMIT = 400 # 400 свечей хватает для EMA 200 и теста последних 30 дней (180 свечей)
+HISTORY_LIMIT = 400
 SCAN_INTERVAL = 14400 
+TIME_STOP_BARS = 10 # 40 часов (10 свечей по 4H). Максимальное время жизни сделки.
 
 def get_data(symbol):
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={INTERVAL}&limit={HISTORY_LIMIT}"
@@ -63,6 +64,14 @@ def calculate_adx(highs, lows, closes, period=14):
     except:
         return 20
 
+def get_adaptive_multipliers(current_atr, historical_atrs):
+    # Динамический расчет множителей на основе фазы волатильности
+    avg_atr = sum(historical_atrs) / len(historical_atrs) if historical_atrs else current_atr
+    if current_atr > avg_atr * 1.2:
+        return 2.5, 3.0, "HIGH" # Рынок штормит, расширяем стопы
+    else:
+        return 1.5, 2.0, "NORMAL" # Спокойный рынок, сужаем стопы
+
 def calculate_terminal_backtest():
     t_all, w_all = 0, 0
     rows = []
@@ -79,8 +88,7 @@ def calculate_terminal_backtest():
             continue
         
         t, w = 0, 0
-        # 30 дней = 180 четырехчасовых свечей. Стартуем с len(candles) - 180
-        start_idx = max(200, len(candles) - 180)
+        start_idx = max(200, len(candles) - 180) # 30 дней теста
         
         for i in range(start_idx, len(candles) - 1):
             p_slice = closes[:i+1]
@@ -96,40 +104,57 @@ def calculate_terminal_backtest():
             
             h_slice = highs[i-14:i+1]
             l_slice = lows[i-14:i+1]
-            atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
+            current_atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
+            
+            # Собираем историю ATR за последние 60 свечей (10 дней)
+            hist_atrs = []
+            for k in range(i-60, i):
+                hk = highs[k-14:k+1]
+                lk = lows[k-14:k+1]
+                if len(hk) == 15:
+                    hist_atrs.append(sum([hk[j] - lk[j] for j in range(15)]) / 15)
+            
+            sl_mult, tp_mult, _ = get_adaptive_multipliers(current_atr, hist_atrs)
             
             sig = None
-            # Фильтр ADX > 20 означает, что рынок в фазе тренда, а не в "мясорубке"
             if adx > 20:
                 if ema50 > ema200 and curr_p < ema50 and curr_p > ema200 and rsi < 45:
                     sig = "LONG"
                     entry = curr_p
-                    sl = entry - (atr * 2.0)
-                    tp = entry + (atr * 2.5)
+                    sl = entry - (current_atr * sl_mult)
+                    tp = entry + (current_atr * tp_mult)
                 elif ema50 < ema200 and curr_p > ema50 and curr_p < ema200 and rsi > 55:
                     sig = "SHORT"
                     entry = curr_p
-                    sl = entry + (atr * 2.0)
-                    tp = entry - (atr * 2.5)
+                    sl = entry + (current_atr * sl_mult)
+                    tp = entry - (current_atr * tp_mult)
                 
             if sig:
                 t += 1
                 hit = False
-                for j in range(1, 41):
+                for j in range(1, TIME_STOP_BARS + 2):
                     if i + j >= len(candles): break
                     h_f = highs[i+j]
                     l_f = lows[i+j]
+                    c_f = closes[i+j]
                     
                     if sig == "LONG":
-                        if l_f <= sl: break
+                        if l_f <= sl: break # Выбило по стопу
                         if h_f >= tp:
-                            hit = True
+                            hit = True # Взяли профит
                             break
+                        # TIME STOP: Если прошло 10 свечей, а профита нет - закрываем. Если цена хуже точки входа - это убыток.
+                        if j == TIME_STOP_BARS and c_f < entry:
+                            break 
                     else:
                         if h_f >= sl: break
                         if l_f <= tp:
                             hit = True
                             break
+                        # TIME STOP для шорта
+                        if j == TIME_STOP_BARS and c_f > entry:
+                            break
+                            
                 if hit:
                     w += 1
                     
@@ -143,7 +168,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        f"=== ELITE 4H SWING (30D) ===\n"
+        f"=== ADAPTIVE 4H SWING (30D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -158,7 +183,7 @@ def calculate_terminal_backtest():
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📊 SYSTEM STATS (30D)", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 SYSTEM STATS (ADAPTIVE)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
             [{"text": "🧠 STRATEGY INFO", "callback_data": "SHOW_STRATEGY"},
@@ -178,7 +203,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print(f"Elite 4H Scanner Online (Interval: {INTERVAL})...")
+    print(f"Adaptive 4H Scanner Online (Interval: {INTERVAL})...")
     last_alerts = {}
     while True:
         try:
@@ -196,20 +221,29 @@ def live_scanner():
                 adx = calculate_adx(highs, lows, closes, 14)
                 
                 curr_p = closes[-1]
-                atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
+                current_atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
+                
+                hist_atrs = []
+                for k in range(len(candles)-60, len(candles)):
+                    hk = highs[k-14:k+1]
+                    lk = lows[k-14:k+1]
+                    if len(hk) == 15:
+                        hist_atrs.append(sum([hk[j] - lk[j] for j in range(15)]) / 15)
+                        
+                sl_mult, tp_mult, vol_phase = get_adaptive_multipliers(current_atr, hist_atrs)
                 
                 signal = None
                 if adx > 20:
                     if ema50 > ema200 and curr_p < ema50 and curr_p > ema200 and rsi < 45:
                         signal = "LONG"
                         entry = curr_p
-                        sl = entry - (atr * 2.0)
-                        tp = entry + (atr * 2.5)
+                        sl = entry - (current_atr * sl_mult)
+                        tp = entry + (current_atr * tp_mult)
                     elif ema50 < ema200 and curr_p > ema50 and curr_p < ema200 and rsi > 55:
                         signal = "SHORT"
                         entry = curr_p
-                        sl = entry + (atr * 2.0)
-                        tp = entry - (atr * 2.5)
+                        sl = entry + (current_atr * sl_mult)
+                        tp = entry - (current_atr * tp_mult)
                 
                 if signal:
                     now = time.time()
@@ -217,9 +251,12 @@ def live_scanner():
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
+                        # Расчет времени экспирации сигнала
+                        time_stop_hours = TIME_STOP_BARS * 4
+                        
                         msg = (
                             "```text\n"
-                            f"[4H ELITE ALERT] // {sym_name}USDT\n"
+                            f"[ADAPTIVE 4H ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  {INTERVAL}\n"
@@ -227,8 +264,9 @@ def live_scanner():
                             f"STOP-LOSS:  {sl:.4f}\n"
                             f"TAKE-PROFIT: {tp:.4f}\n"
                             "---------------------------------\n"
-                            f"FILTER: ADX > 20 (Trend Confirmed)\n"
-                            f"RSI: {rsi:.1f} | ATR: {atr:.4f}\n"
+                            f"VOLATILITY PHASE: {vol_phase}\n"
+                            f"TIME LIMIT: MAX {time_stop_hours} HOURS\n"
+                            f"RSI: {rsi:.1f} | ADX: {adx:.1f}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
@@ -240,7 +278,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Elite 4H Engine Online...")
+    print("Adaptive Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -255,7 +293,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing elite 30-day backtest...", get_main_keyboard())
+                        send_msg(chat_id, "Processing adaptive backtest with time-decay...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -274,7 +312,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"STRATEGY: Elite 4H Trend (ADX Filtered)\n"
+                            f"STRATEGY: Adaptive 4H w/ Time Stop\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -282,19 +320,18 @@ def bot_engine():
                     elif data == "SHOW_STRATEGY":
                         msg = (
                             "```text\n"
-                            "=== TRADING MODEL: ELITE 4H SWING ===\n"
-                            "TYPE: Trend Pullback w/ Volatility Filter\n"
+                            "=== TRADING MODEL: ADAPTIVE DYNAMICS ===\n"
+                            "TYPE: Machine-Logic Swing Trading\n"
                             "TIMEFRAME: 4h\n"
                             "---------------------------------\n"
-                            "[ LOGIC ]\n"
-                            "Trades institutional pullbacks into the Golden Pocket (EMA 50-200), but ONLY if the ADX indicator confirms a strong market trend. Flat, choppy markets are ignored entirely.\n\n"
-                            "[ FILTERS & INDICATORS ]\n"
-                            "1. EMA 200 & 50: Macro trend and value zone.\n"
-                            "2. ADX (14) > 20: Filters out 'chop' and fakeouts.\n"
-                            "3. RSI (14): Exhaustion confirmation.\n\n"
+                            "[ DYNAMIC LOGIC ]\n"
+                            "This bot learns from current market rhythm.\n"
+                            "1. Volatility Scaling: If market is erratic, stops expand automatically to avoid wicks. If calm, stops tighten to increase R:R.\n"
+                            "2. Time-In-Market Decay: Real institutional moves happen fast. If a trade does not hit target within 40 hours (10 bars), the setup is considered failed and capital is freed.\n\n"
                             "[ RISK MANAGEMENT ]\n"
-                            "- Stop-Loss: 2.0 ATR (Wide protection against wicks)\n"
-                            "- Take-Profit: 2.5 ATR (High reward targets)\n"
+                            "- SL: 1.5x - 2.5x ATR (Auto-scaled)\n"
+                            "- TP: 2.0x - 3.0x ATR (Auto-scaled)\n"
+                            "- Hard Time Stop: 40 Hours max hold.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -303,10 +340,10 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "1. SYSTEM STATS: 30-day filtered Backtest.\n"
-                            "2. ASSETS: List of tracked pairs.\n"
-                            "3. STRATEGY INFO: ADX Logic and risk metrics.\n"
-                            "4. SIGNALS: 4H verified pullbacks.\n"
+                            "1. SYSTEM STATS: 30-day dynamic backtest.\n"
+                            "2. ASSETS: Tracked pairs.\n"
+                            "3. STRATEGY INFO: Auto-scaling rules.\n"
+                            "4. SIGNALS: Adaptive pullbacks with time limits.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -314,9 +351,9 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "ELITE 4H TERMINAL ACTIVE\n"
+                            "ADAPTIVE 4H TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "System initialized. Filtering market noise...\n"
+                            "System initialized. Calibrating volatility...\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
@@ -326,7 +363,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Elite Terminal Server Active"
+def home(): return "Adaptive Terminal Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
