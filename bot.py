@@ -1,6 +1,5 @@
 from flask import Flask
 import urllib.request, urllib.parse, json, ssl, time, threading, os
-import math
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -11,9 +10,9 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 
-# --- ПАРАМЕТРЫ HFT / MEAN REVERSION МОДЕЛИ ---
+# --- ПАРАМЕТРЫ FUTURES SWING МОДЕЛИ ---
 INTERVAL = "1h"
-HISTORY_LIMIT = 400
+HISTORY_LIMIT = 500 # Увеличено для расчета EMA 200
 SCAN_INTERVAL = 3600
 
 def get_data(symbol):
@@ -36,12 +35,13 @@ def calculate_rsi(closes, period=14):
     rs = (gains / period) / (losses / period)
     return 100 - (100 / (1 + rs))
 
-def calculate_bollinger(closes, period=20, dev=2.5):
-    if len(closes) < period: return closes[-1], closes[-1], closes[-1]
-    sma = sum(closes[-period:]) / period
-    variance = sum([(c - sma) ** 2 for c in closes[-period:]]) / period
-    std = math.sqrt(variance)
-    return sma, sma + (dev * std), sma - (dev * std)
+def calculate_ema(prices, period):
+    if len(prices) < period: return prices[-1]
+    multiplier = 2 / (period + 1)
+    ema = sum(prices[:period]) / period
+    for price in prices[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
 
 def calculate_terminal_backtest():
     t_all, w_all = 0, 0
@@ -49,43 +49,55 @@ def calculate_terminal_backtest():
     
     for symbol in SYMBOLS:
         candles = get_data(symbol)
-        if not candles or len(candles) < 50: continue
+        if not candles or len(candles) < 250: continue
         
         try:
             closes = [float(c[4]) for c in candles]
             highs = [float(c[2]) for c in candles]
             lows = [float(c[3]) for c in candles]
+            opens = [float(c[1]) for c in candles]
         except:
             continue
         
         t, w = 0, 0
-        for i in range(40, len(candles) - 1):
+        # Начинаем с 200, чтобы EMA 200 успела рассчитаться корректно
+        for i in range(200, len(candles) - 1):
             p_slice = closes[:i+1]
+            
+            ema200 = calculate_ema(p_slice, 200)
+            ema50 = calculate_ema(p_slice, 50)
             rsi = calculate_rsi(p_slice, 14)
-            sma, upper_bb, lower_bb = calculate_bollinger(p_slice, 20, 2.5)
             
             curr_p = closes[i]
+            open_p = opens[i]
+            low_p = lows[i]
+            high_p = highs[i]
             
             h_slice = highs[i-14:i+1]
             l_slice = lows[i-14:i+1]
             atr = sum([h_slice[j] - l_slice[j] for j in range(len(h_slice))]) / 14
             
             sig = None
-            if curr_p < lower_bb and rsi < 30: 
-                sig = "LONG"
-                entry = curr_p
-                sl = entry - (atr * 2.0)
-                tp = entry + (atr * 1.0)
-            elif curr_p > upper_bb and rsi > 70: 
-                sig = "SHORT"
-                entry = curr_p
-                sl = entry + (atr * 2.0)
-                tp = entry - (atr * 1.0)
+            # ЛОНГ: Глобальный тренд вверх, откат к зоне EMA 50, отскок (зеленая свеча)
+            if curr_p > ema200 and ema50 > ema200:
+                if low_p <= ema50 and curr_p > ema50 and curr_p > open_p and rsi < 55:
+                    sig = "LONG"
+                    entry = curr_p
+                    sl = entry - (atr * 1.5)
+                    tp = entry + (atr * 2.25)
+            # ШОРТ: Глобальный тренд вниз, откат к зоне EMA 50, отскок (красная свеча)
+            elif curr_p < ema200 and ema50 < ema200:
+                if high_p >= ema50 and curr_p < ema50 and curr_p < open_p and rsi > 45:
+                    sig = "SHORT"
+                    entry = curr_p
+                    sl = entry + (atr * 1.5)
+                    tp = entry - (atr * 2.25)
                 
             if sig:
                 t += 1
                 hit = False
-                for j in range(1, 25):
+                # Ждем отработки сигнала до 72 часов (свинг-сделка)
+                for j in range(1, 73):
                     if i + j >= len(candles): break
                     h_f = highs[i+j]
                     l_f = lows[i+j]
@@ -113,7 +125,7 @@ def calculate_terminal_backtest():
     table_content = "\n".join(rows)
     
     report = (
-        f"=== STATISTICAL ARBITRAGE (14D) ===\n"
+        f"=== FUTURES SWING REPORT (14D) ===\n"
         "PAIR  | WIN/TOT | WINRATE\n"
         "---------------------------------\n"
         f"{table_content}\n"
@@ -128,7 +140,7 @@ def calculate_terminal_backtest():
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📊 SYSTEM STATS (14D)", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 SYSTEM STATS (SWING)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
             [{"text": "🧠 STRATEGY INFO", "callback_data": "SHOW_STRATEGY"},
@@ -148,53 +160,65 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print(f"Quant Arbitrage Scanner Online (Interval: {INTERVAL})...")
+    print(f"Futures Swing Scanner Online (Interval: {INTERVAL})...")
     last_alerts = {}
     while True:
         try:
             for symbol in SYMBOLS:
                 candles = get_data(symbol)
-                if not candles or len(candles) < 50: continue
+                if not candles or len(candles) < 250: continue
                 
                 closes = [float(c[4]) for c in candles]
                 highs = [float(c[2]) for c in candles]
                 lows = [float(c[3]) for c in candles]
+                opens = [float(c[1]) for c in candles]
                 
+                ema200 = calculate_ema(closes, 200)
+                ema50 = calculate_ema(closes, 50)
                 rsi = calculate_rsi(closes, 14)
-                sma, upper_bb, lower_bb = calculate_bollinger(closes, 20, 2.5)
+                
                 curr_p = closes[-1]
+                open_p = opens[-1]
+                low_p = lows[-1]
+                high_p = highs[-1]
                 
                 atr = sum([highs[j] - lows[j] for j in range(-14, 0)]) / 14
                 
                 signal = None
-                if curr_p < lower_bb and rsi < 30:
-                    signal = "LONG"
-                    entry = curr_p
-                    sl = entry - (atr * 2.0)
-                    tp1 = entry + (atr * 1.0)
-                elif curr_p > upper_bb and rsi > 70:
-                    signal = "SHORT"
-                    entry = curr_p
-                    sl = entry + (atr * 2.0)
-                    tp1 = entry - (atr * 1.0)
+                if curr_p > ema200 and ema50 > ema200:
+                    if low_p <= ema50 and curr_p > ema50 and curr_p > open_p and rsi < 55:
+                        signal = "LONG"
+                        entry = curr_p
+                        sl = entry - (atr * 1.5)
+                        tp1 = entry + (atr * 1.5)
+                        tp2 = entry + (atr * 3.0)
+                elif curr_p < ema200 and ema50 < ema200:
+                    if high_p >= ema50 and curr_p < ema50 and curr_p < open_p and rsi > 45:
+                        signal = "SHORT"
+                        entry = curr_p
+                        sl = entry + (atr * 1.5)
+                        tp1 = entry - (atr * 1.5)
+                        tp2 = entry - (atr * 3.0)
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 43200:
+                    # 12 часов задержки на монету, чтобы не дублировать сигнал в одной зоне
+                    if now - last_alerts.get(symbol, 0) > 43200: 
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
                         msg = (
                             "```text\n"
-                            f"[STAT ARBITRAGE ALERT] // {sym_name}USDT\n"
+                            f"[FUTURES SWING ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
                             f"TIMEFRAME:  {INTERVAL}\n"
                             f"ENTRY:      {entry:.4f}\n"
                             f"STOP-LOSS:  {sl:.4f}\n"
-                            f"TAKE-PROFIT: {tp1:.4f}\n"
+                            f"TAKE-PROFIT 1: {tp1:.4f}\n"
+                            f"TAKE-PROFIT 2: {tp2:.4f}\n"
                             "---------------------------------\n"
-                            f"RSI: {rsi:.1f} | DEVIATION: >2.5 SD\n"
+                            f"MACRO TREND: CONFIRMED (EMA200)\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
                         )
@@ -207,7 +231,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Wall Street Quant Engine Online...")
+    print("Futures Swing Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -222,7 +246,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        send_msg(chat_id, "Processing statistical backtest...", get_main_keyboard())
+                        send_msg(chat_id, "Processing futures analytics...", get_main_keyboard())
                         report = calculate_terminal_backtest()
                         send_msg(chat_id, report, get_main_keyboard())
                         
@@ -241,7 +265,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"STRATEGY: Bollinger 2.5SD Fade\n"
+                            f"STRATEGY: Futures Trend Pullback\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -249,19 +273,20 @@ def bot_engine():
                     elif data == "SHOW_STRATEGY":
                         msg = (
                             "```text\n"
-                            "=== TRADING MODEL: BOLLINGER PANIC FADE ===\n"
-                            "TYPE: Mean Reversion (Statistical Arbitrage)\n"
+                            "=== TRADING MODEL: TREND PULLBACK ===\n"
+                            "TYPE: Trend Following (Swing / Intraday)\n"
                             "TIMEFRAME: 1h\n"
                             "---------------------------------\n"
                             "[ LOGIC ]\n"
-                            "The algorithm acts as a liquidity provider. It does not chase trends. It waits for extreme market panic or euphoria and enters on the mathematical reversion to the mean.\n\n"
+                            "The algorithm trades exclusively with the macro trend. It waits for retail traders to take profits (pullback), and enters when price rejects the dynamic value zone, aligning with institutional capital.\n\n"
                             "[ FILTERS & INDICATORS ]\n"
-                            "1. Bollinger Bands (20, 2.5 SD): Tracks 99% of normal price action. Entry triggers ONLY when price breaks out of the 2.5 standard deviation boundary.\n"
-                            "2. RSI (14): Confirms extreme momentum (RSI < 30 for Long, RSI > 70 for Short).\n"
-                            "3. ATR (14): Calculates dynamic volatility targets.\n\n"
+                            "1. EMA 200: Determines the macro trend direction. No trades are taken against it.\n"
+                            "2. EMA 50: The 'Value Zone'. Price must touch or pierce this zone to confirm the pullback.\n"
+                            "3. Price Action: The candle must reject the EMA 50 and close in the direction of the macro trend.\n\n"
                             "[ RISK MANAGEMENT ]\n"
-                            "- Take-Profit: 1 ATR (Close target for 80%+ winrate)\n"
-                            "- Stop-Loss: 2 ATR (Wide stop to survive volatility spikes)\n"
+                            "- Stop-Loss: 1.5 ATR (Below the pullback low)\n"
+                            "- Take-Profit 1: 1.5 ATR (Risk 1:1)\n"
+                            "- Take-Profit 2: 3.0 ATR (Risk 1:2)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -273,7 +298,7 @@ def bot_engine():
                             "1. SYSTEM STATS: 14-day Backtest report.\n"
                             "2. ASSETS: List of tracked pairs.\n"
                             "3. STRATEGY INFO: Logic and risk management.\n"
-                            "4. SIGNALS: Automatic 1h extreme alerts.\n"
+                            "4. SIGNALS: Automatic 1h trend pullback alerts.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -281,9 +306,9 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "WALL STREET QUANT TERMINAL ACTIVE\n"
+                            "FUTURES PRO TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "System initialized. Awaiting market anomalies...\n"
+                            "System initialized. Scanning for macro trend pullbacks...\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
@@ -293,7 +318,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Quant Terminal Server Active"
+def home(): return "Futures Terminal Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
