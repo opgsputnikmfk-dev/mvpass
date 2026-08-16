@@ -27,7 +27,6 @@ def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
         return []
 
 def get_macro_trend():
-    # На 15-минутках макро-тренд смотрим по 4H графику Биткоина
     btc_4h = get_data("BTCUSDT", "4h", 50)
     if not btc_4h: return "NEUTRAL"
     closes = [float(c[4]) for c in btc_4h]
@@ -73,7 +72,6 @@ def predict_knn(candles, current_idx, atr, macro_trend):
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
-    # Снижен порог входа (от 3 из 5) для увеличения частоты сделок
     if ups >= 3 and macro_trend != "BEARISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
         if ups == 5: conviction = "HIGH (2.0% RISK)"
@@ -90,76 +88,9 @@ def predict_knn(candles, current_idx, atr, macro_trend):
         
     return None, 0, ""
 
-def calculate_terminal_backtest():
-    t_all, w_all = 0, 0
-    rows = []
-    
-    macro_trend = "NEUTRAL" # Упрощаем для бэктеста, чтобы не перегружать сервер
-    
-    for symbol in SYMBOLS:
-        candles = get_data(symbol)
-        if not candles or len(candles) < 300: continue
-        
-        highs = [float(c[2]) for c in candles]
-        lows = [float(c[3]) for c in candles]
-        closes = [float(c[4]) for c in candles]
-        
-        t, w = 0, 0
-        # Бэктест за последние 3 дня (288 свечей по 15m), чтобы сервер Render не упал
-        start_idx = len(candles) - 288
-        
-        for i in range(start_idx, len(candles) - 10):
-            atr = sum([highs[j] - lows[j] for j in range(i-14, i)]) / 14
-            sig, tp_mult, _ = predict_knn(candles, i, atr, macro_trend)
-            
-            if sig:
-                t += 1
-                hit = False
-                curr_p = closes[i]
-                sl = curr_p - (atr * 1.5) if sig == "LONG" else curr_p + (atr * 1.5)
-                tp = curr_p + (atr * tp_mult) if sig == "LONG" else curr_p - (atr * tp_mult)
-                
-                for j in range(1, 10):
-                    h_f = highs[i+j]
-                    l_f = lows[i+j]
-                    if sig == "LONG":
-                        if l_f <= sl: break
-                        if h_f >= tp:
-                            hit = True
-                            break
-                    else:
-                        if h_f >= sl: break
-                        if l_f <= tp:
-                            hit = True
-                            break
-                if hit: w += 1
-                    
-        t_all += t
-        w_all += w
-        sym_name = symbol.replace('USDT', '').ljust(5)
-        wr_sym = (w / t * 100) if t > 0 else 0.0
-        rows.append(f"{sym_name} | {str(w).rjust(2)}/{str(t).rjust(3)} | {wr_sym:5.1f}%")
-            
-    winrate = (w_all / t_all * 100) if t_all > 0 else 0
-    table_content = "\n".join(rows)
-    
-    report = (
-        f"=== HIGH-FREQ ML (3D) ===\n"
-        "PAIR  | WIN/TOT | WINRATE\n"
-        "---------------------------------\n"
-        f"{table_content}\n"
-        "---------------------------------\n"
-        f"TOTAL TRADES: {t_all}\n"
-        f"SUCCESSFUL:   {w_all}\n"
-        f"WINRATE:      {winrate:.1f}%\n"
-        f"TIMESTAMP:    {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
-    )
-    return f"```text\n{report}\n```"
-
 def get_main_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📊 SYSTEM STATS (3D LIMIT)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
             [{"text": "🧠 STRATEGY INFO", "callback_data": "SHOW_STRATEGY"},
@@ -201,7 +132,6 @@ def live_scanner():
                 
                 if signal:
                     now = time.time()
-                    # Задержка сокращена до 2 часов (7200 сек), чтобы ловить больше волн
                     if now - last_alerts.get(symbol, 0) > 7200:
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
@@ -256,15 +186,7 @@ def bot_engine():
                 if chat_id:
                     active_chats.add(chat_id)
                     
-                    if data == "SHOW_STATS":
-                        send_msg(chat_id, "Calculating 3-day ML Backtest (Please wait ~10-15 seconds)...", get_main_keyboard())
-                        # Запускаем в отдельном потоке, чтобы Telegram не отвалился по таймауту
-                        def run_stats():
-                            report = calculate_terminal_backtest()
-                            send_msg(chat_id, report, get_main_keyboard())
-                        threading.Thread(target=run_stats).start()
-                        
-                    elif data == "SHOW_ASSETS":
+                    if data == "SHOW_ASSETS":
                         assets_list = ", ".join([s.replace('USDT', '') for s in SYMBOLS])
                         msg = f"```text\nMONITORED ASSETS (10):\n{assets_list}\n```"
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -290,7 +212,7 @@ def bot_engine():
                             "=== TRADING MODEL: HIGH-FREQ ML ===\n"
                             "TYPE: 15m Fast Execution AI\n"
                             "---------------------------------\n"
-                            "Optimized for high trade frequency by lowering pattern consensus from 80% to 60%.\n\n"
+                            "Optimized for high trade frequency by lowering pattern consensus to 60%.\n\n"
                             "[ RISK MANAGEMENT GRADIENT ]\n"
                             "- 5/5 Matches: HIGH (2% Risk)\n"
                             "- 4/5 Matches: NORMAL (1% Risk)\n"
@@ -303,7 +225,7 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "Stats are limited to 3 Days to prevent server overload on free cloud tiers.\n"
+                            "Server load minimized. Real-time scanning active.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
