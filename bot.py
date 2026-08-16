@@ -11,9 +11,10 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 
-INTERVAL = "1h"
+# --- ПАРАМЕТРЫ HIGH-FREQUENCY ML ---
+INTERVAL = "15m"
 HISTORY_LIMIT = 1000
-SCAN_INTERVAL = 3600
+SCAN_INTERVAL = 900 # Сканируем каждые 15 минут
 NEIGHBORS = 5
 
 def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
@@ -26,10 +27,10 @@ def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
         return []
 
 def get_macro_trend():
-    # Получаем дневной тренд Биткоина (1D) как глобальный поводырь
-    btc_daily = get_data("BTCUSDT", "1d", 50)
-    if not btc_daily: return "NEUTRAL"
-    closes = [float(c[4]) for c in btc_daily]
+    # На 15-минутках макро-тренд смотрим по 4H графику Биткоина
+    btc_4h = get_data("BTCUSDT", "4h", 50)
+    if not btc_4h: return "NEUTRAL"
+    closes = [float(c[4]) for c in btc_4h]
     sma20 = sum(closes[-20:]) / 20
     if closes[-1] > sma20: return "BULLISH"
     elif closes[-1] < sma20: return "BEARISH"
@@ -62,10 +63,9 @@ def predict_knn(candles, current_idx, atr, macro_trend):
         hist_fp = get_fingerprint(opens, highs, lows, closes, volumes, hist_i, hist_atr)
         dist = calculate_distance(current_fp, hist_fp)
         
-        # Заглядываем в будущее на 5 баров
         future_move = closes[hist_i + 5] - closes[hist_i]
         outcome = 1 if future_move > hist_atr * 0.5 else (-1 if future_move < -hist_atr * 0.5 else 0)
-        distances.append((dist, outcome, abs(future_move) / hist_atr)) # Сохраняем силу движения в ATR
+        distances.append((dist, outcome, abs(future_move) / hist_atr))
         
     distances.sort(key=lambda x: x[0])
     top_neighbors = distances[:NEIGHBORS]
@@ -73,26 +73,93 @@ def predict_knn(candles, current_idx, atr, macro_trend):
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
-    # Предсказание амплитуды (Magnitude Prediction): средний профит в удачных случаях
-    if ups >= 4 and macro_trend != "BEARISH": # Запрет лонгов на медвежьем рынке
+    # Снижен порог входа (от 3 из 5) для увеличения частоты сделок
+    if ups >= 3 and macro_trend != "BEARISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
-        conviction = "HIGH (2% RISK)" if ups == 5 else "NORMAL (1% RISK)"
-        return "LONG", max(1.5, avg_move), conviction
+        if ups == 5: conviction = "HIGH (2.0% RISK)"
+        elif ups == 4: conviction = "NORMAL (1.0% RISK)"
+        else: conviction = "LOW (0.5% RISK)"
+        return "LONG", max(1.2, avg_move), conviction
         
-    if downs >= 4 and macro_trend != "BULLISH": # Запрет шортов на бычьем рынке
+    if downs >= 3 and macro_trend != "BULLISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
-        conviction = "HIGH (2% RISK)" if downs == 5 else "NORMAL (1% RISK)"
-        return "SHORT", max(1.5, avg_move), conviction
+        if downs == 5: conviction = "HIGH (2.0% RISK)"
+        elif downs == 4: conviction = "NORMAL (1.0% RISK)"
+        else: conviction = "LOW (0.5% RISK)"
+        return "SHORT", max(1.2, avg_move), conviction
         
     return None, 0, ""
 
 def calculate_terminal_backtest():
-    # Упрощенный бэктест для ML с учетом макро-тренда (очень тяжелый расчет)
-    return "```text\n[!] ML Engine Backtest requires dedicated GPU instances.\nReal-time forward testing mode active.\n```"
+    t_all, w_all = 0, 0
+    rows = []
+    
+    macro_trend = "NEUTRAL" # Упрощаем для бэктеста, чтобы не перегружать сервер
+    
+    for symbol in SYMBOLS:
+        candles = get_data(symbol)
+        if not candles or len(candles) < 300: continue
+        
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+        closes = [float(c[4]) for c in candles]
+        
+        t, w = 0, 0
+        # Бэктест за последние 3 дня (288 свечей по 15m), чтобы сервер Render не упал
+        start_idx = len(candles) - 288
+        
+        for i in range(start_idx, len(candles) - 10):
+            atr = sum([highs[j] - lows[j] for j in range(i-14, i)]) / 14
+            sig, tp_mult, _ = predict_knn(candles, i, atr, macro_trend)
+            
+            if sig:
+                t += 1
+                hit = False
+                curr_p = closes[i]
+                sl = curr_p - (atr * 1.5) if sig == "LONG" else curr_p + (atr * 1.5)
+                tp = curr_p + (atr * tp_mult) if sig == "LONG" else curr_p - (atr * tp_mult)
+                
+                for j in range(1, 10):
+                    h_f = highs[i+j]
+                    l_f = lows[i+j]
+                    if sig == "LONG":
+                        if l_f <= sl: break
+                        if h_f >= tp:
+                            hit = True
+                            break
+                    else:
+                        if h_f >= sl: break
+                        if l_f <= tp:
+                            hit = True
+                            break
+                if hit: w += 1
+                    
+        t_all += t
+        w_all += w
+        sym_name = symbol.replace('USDT', '').ljust(5)
+        wr_sym = (w / t * 100) if t > 0 else 0.0
+        rows.append(f"{sym_name} | {str(w).rjust(2)}/{str(t).rjust(3)} | {wr_sym:5.1f}%")
+            
+    winrate = (w_all / t_all * 100) if t_all > 0 else 0
+    table_content = "\n".join(rows)
+    
+    report = (
+        f"=== HIGH-FREQ ML (3D) ===\n"
+        "PAIR  | WIN/TOT | WINRATE\n"
+        "---------------------------------\n"
+        f"{table_content}\n"
+        "---------------------------------\n"
+        f"TOTAL TRADES: {t_all}\n"
+        f"SUCCESSFUL:   {w_all}\n"
+        f"WINRATE:      {winrate:.1f}%\n"
+        f"TIMESTAMP:    {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC"
+    )
+    return f"```text\n{report}\n```"
 
 def get_main_keyboard():
     return {
         "inline_keyboard": [
+            [{"text": "📊 SYSTEM STATS (3D LIMIT)", "callback_data": "SHOW_STATS"}],
             [{"text": "🪙 MONITORED ASSETS", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 BOT STATUS", "callback_data": "BOT_STATUS"}],
             [{"text": "🧠 STRATEGY INFO", "callback_data": "SHOW_STRATEGY"},
@@ -104,7 +171,7 @@ def send_msg(chat_id, text, keyboard=None):
     if not TELEGRAM_TOKEN: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage?chat_id={chat_id}&text={urllib.parse.quote(text)}&parse_mode=Markdown"
     if keyboard: url += f"&reply_markup={urllib.parse.quote(json.dumps(keyboard))}"
-    try: urllib.request.urlopen(url, context=context, timeout=5)
+    try: urllib.request.urlopen(url, context=context, timeout=10)
     except: pass
 
 def broadcast(text):
@@ -112,7 +179,7 @@ def broadcast(text):
         send_msg(chat_id, text, get_main_keyboard())
 
 def live_scanner():
-    print("Omni-Vision ML Scanner Online...")
+    print("HF ML Scanner Online (15m)...")
     last_alerts = {}
     while True:
         try:
@@ -134,7 +201,8 @@ def live_scanner():
                 
                 if signal:
                     now = time.time()
-                    if now - last_alerts.get(symbol, 0) > 28800:
+                    # Задержка сокращена до 2 часов (7200 сек), чтобы ловить больше волн
+                    if now - last_alerts.get(symbol, 0) > 7200:
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
@@ -144,7 +212,7 @@ def live_scanner():
                         if signal == "LONG":
                             sl = curr_p - sl_dist
                             tp = curr_p + tp_dist
-                            be_point = curr_p + (atr * 1.0) # Безубыток
+                            be_point = curr_p + (atr * 1.0)
                         else:
                             sl = curr_p + sl_dist
                             tp = curr_p - tp_dist
@@ -152,16 +220,16 @@ def live_scanner():
                         
                         msg = (
                             "```text\n"
-                            f"[OMNI-VISION AI ALERT] // {sym_name}USDT\n"
+                            f"[HF AI ALERT] // {sym_name}USDT\n"
                             "---------------------------------\n"
                             f"ACTION:     {signal}\n"
+                            f"TIMEFRAME:  15m\n"
                             f"ENTRY:      {curr_p:.4f}\n"
                             f"STOP-LOSS:  {sl:.4f}\n"
-                            f"TAKE-PROFIT: {tp:.4f} (Calculated)\n"
+                            f"TAKE-PROFIT: {tp:.4f}\n"
                             "---------------------------------\n"
                             f"MOVE SL TO BREAK-EVEN AT: {be_point:.4f}\n"
                             "---------------------------------\n"
-                            f"BTC MACRO:  {macro_trend}\n"
                             f"RECOMMENDED RISK: {conviction}\n"
                             f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
                             "```"
@@ -174,7 +242,7 @@ def live_scanner():
 
 def bot_engine():
     last_update_id = 0
-    print("Omni-Vision Engine Online...")
+    print("HF ML Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -188,7 +256,15 @@ def bot_engine():
                 if chat_id:
                     active_chats.add(chat_id)
                     
-                    if data == "SHOW_ASSETS":
+                    if data == "SHOW_STATS":
+                        send_msg(chat_id, "Calculating 3-day ML Backtest (Please wait ~10-15 seconds)...", get_main_keyboard())
+                        # Запускаем в отдельном потоке, чтобы Telegram не отвалился по таймауту
+                        def run_stats():
+                            report = calculate_terminal_backtest()
+                            send_msg(chat_id, report, get_main_keyboard())
+                        threading.Thread(target=run_stats).start()
+                        
+                    elif data == "SHOW_ASSETS":
                         assets_list = ", ".join([s.replace('USDT', '') for s in SYMBOLS])
                         msg = f"```text\nMONITORED ASSETS (10):\n{assets_list}\n```"
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -203,7 +279,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"STRATEGY: Omni-Vision ML (k-NN + Macro)\n"
+                            f"STRATEGY: High-Freq ML (15m)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -211,16 +287,14 @@ def bot_engine():
                     elif data == "SHOW_STRATEGY":
                         msg = (
                             "```text\n"
-                            "=== TRADING MODEL: OMNI-VISION AI ===\n"
-                            "TYPE: Multi-Dimensional Machine Learning\n"
+                            "=== TRADING MODEL: HIGH-FREQ ML ===\n"
+                            "TYPE: 15m Fast Execution AI\n"
                             "---------------------------------\n"
-                            "[ AI LOGIC (k-NN) ]\n"
-                            "Creates a digital fingerprint of current volatility/volume and finds the 5 closest matches in the last 1000 hours of history.\n\n"
-                            "[ NEW FEATURES ENGINES ]\n"
-                            "1. Macro Context: Checks BTC 1D Trend. Blocks altcoin trades that fight the macro market.\n"
-                            "2. Magnitude Prediction: Dynamic Take-Profit based on how far the price moved in historical matches.\n"
-                            "3. Conviction Sizing: 100% consensus = 2% risk. 80% consensus = 1% risk.\n"
-                            "4. Break-Even Logic: Provides an exact price level to move SL to zero-risk.\n"
+                            "Optimized for high trade frequency by lowering pattern consensus from 80% to 60%.\n\n"
+                            "[ RISK MANAGEMENT GRADIENT ]\n"
+                            "- 5/5 Matches: HIGH (2% Risk)\n"
+                            "- 4/5 Matches: NORMAL (1% Risk)\n"
+                            "- 3/5 Matches: LOW (0.5% Risk)\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -229,8 +303,7 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "- Follow the RECOMMENDED RISK.\n"
-                            "- Move SL to Entry when price hits the BREAK-EVEN target.\n"
+                            "Stats are limited to 3 Days to prevent server overload on free cloud tiers.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -238,9 +311,9 @@ def bot_engine():
                     else:
                         welcome_text = (
                             "```text\n"
-                            "OMNI-VISION AI TERMINAL ACTIVE\n"
+                            "HIGH-FREQ AI TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "System initialized. Calibrating macro-environment...\n"
+                            "System initialized. Scanning 15m data...\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
@@ -250,7 +323,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Omni-Vision Server Active"
+def home(): return "HF ML Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
