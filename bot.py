@@ -128,7 +128,7 @@ def edit_msg(chat_id, message_id, text, keyboard=None):
 def broadcast(text):
     msgs = []
     for chat_id in active_chats:
-        mid = send_msg(chat_id, text, get_main_keyboard())
+        mid = send_msg(chat_id, text) # Кнопки отключены для идеальной ленты
         if mid: msgs.append((chat_id, mid))
     return msgs
 
@@ -146,7 +146,7 @@ def live_scanner():
                 # 1. ТРЕКИНГ АКТИВНЫХ СДЕЛОК
                 if symbol in active_trades:
                     trade = active_trades[symbol]
-                    recent_15m = get_data(symbol, "15m", 10) # Проверяем касания стопов на младшем ТФ
+                    recent_15m = get_data(symbol, "15m", 10) 
                     
                     if recent_15m:
                         hit_result = None
@@ -183,7 +183,7 @@ def live_scanner():
                             new_msg = trade["original_msg"].replace("🤖 **INTRADAY AI ALERT", "🟡 **[TP1 ВЗЯТ - СТОП В БУ]")
                             trade["original_msg"] = new_msg
                             for chat_id, msg_id in trade["messages"]:
-                                edit_msg(chat_id, msg_id, new_msg, get_main_keyboard())
+                                edit_msg(chat_id, msg_id, new_msg) # Кнопки отключены
 
                         if hit_result:
                             reason = ""
@@ -201,7 +201,7 @@ def live_scanner():
                             updated_msg += f"\n\n**Итог сделки:**\n{reason}"
                             
                             for chat_id, msg_id in trade["messages"]:
-                                edit_msg(chat_id, msg_id, updated_msg, get_main_keyboard())
+                                edit_msg(chat_id, msg_id, updated_msg) # Кнопки отключены
                                 
                             del active_trades[symbol]
                             continue 
@@ -222,7 +222,6 @@ def live_scanner():
                     signal, tp_atr_mult, conviction = predict_knn(candles, current_idx, atr, macro_trend)
                     
                     if signal:
-                        # Пауза 8 часов (28800 сек) между сделками по одной монете (чтобы ловить интрадей-волны)
                         if now - last_alerts.get(symbol, 0) > 28800: 
                             last_alerts[symbol] = now
                             sym_name = symbol.replace('USDT', '')
@@ -331,11 +330,12 @@ def bot_engine():
                             "💡 **Инструкция к действию:**\n"
                             "1. Все цифры (вход, стоп, тейки) **кликабельны** — копируй в один клик.\n"
                             "2. Оформляй сделку на бирже по сигналам.\n"
-                            "3. Бот **сам проследит** за графиком и изменит сообщение на `[TP1 ВЗЯТ]`, `[TP2 ВЗЯТ]` или `[СТОП-ЛОСС]`. Тебе не нужно сидеть у монитора."
+                            "3. Бот **сам проследит** за графиком и изменит сообщение на `[TP1 ВЗЯТ]`, `[TP2 ВЗЯТ]` или `[СТОП-ЛОСС]`. Тебе не нужно сидеть у монитора.\n"
+                            "4. Чтобы вызвать это меню в любой момент, просто отправь боту любое текстовое сообщение."
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
                         
-                    else:
+                    elif "message" in u and "text" in u["message"]:
                         welcome_text = (
                             "🚀 **INTRADAY AI ТЕРМИНАЛ АКТИВЕН**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
