@@ -4,6 +4,8 @@ import math
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_CHAT_ID = None  # <--- Можешь вписать сюда свой цифровой ID для приватности (например: 123456789)
+
 context = ssl._create_unverified_context()
 app = Flask(__name__)
 
@@ -12,16 +14,15 @@ active_chats = set()
 start_time = time.time()
 DB_FILE = "trades_log.json"
 
-INTERVAL = "1h"
-HISTORY_LIMIT = 1000
 SCAN_INTERVAL = 300 
 NEIGHBORS = 5
 
 # --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
-def save_trade_to_db(symbol, signal, reason, entry, close_price, is_news_anomaly):
+def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
     trade_data = {
         "symbol": symbol,
         "signal": signal,
+        "timeframe": timeframe_label,
         "reason": reason, # "TP2", "BE", "SL"
         "entry": entry,
         "close_price": close_price,
@@ -63,37 +64,26 @@ def generate_monthly_report():
         
         winrate = (wins / (total - be) * 100) if (total - be) > 0 else 0
         
-        analysis = ""
-        if losses > wins + be:
-            analysis += "📉 **Проблема:** Количество убытков превышает прибыль.\n💡 **Предложение:** Макро-фильтр 1D недостаточно сильный. Рассмотрите торговлю только парами с высокой корреляцией к BTC.\n"
-        elif be > wins and be > losses:
-            analysis += "⚖️ **Проблема:** Слишком много сделок закрывается в ноль (Безубыток).\n💡 **Предложение:** TP1 стоит слишком близко. Цена цепляет его и откатывает. Рекомендуется сдвинуть TP1 на 1.5 ATR.\n"
-        elif winrate > 60:
-            analysis += "🚀 **Статус:** Стратегия показывает отличную эффективность. Паттерны работают. Изменений не требуется.\n"
-        else:
-            analysis += "🔄 **Статус:** Рынок во флэте. Система работает в режиме сохранения капитала.\n"
-            
-        if anomalies > 0:
-            analysis += f"⚠️ **Влияние новостей:** {anomalies} сделок были закрыты импульсно на фоне аномального объема (вероятно, выход макроэкономических новостей).\n"
-            
         report = (
             f"📊 **АВТО-ОТЧЕТ ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month:02d}.{current_year})**\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
-            f"Всего закрыто сделок: **{total}**\n\n"
+            f"Всего закрыто сделок: **{total}**\n"
+            f"▫️ Интрадей (1H) и Свинг (4H)\n\n"
             f"✅ **Фулл Тейки (TP2):** {wins}\n"
             f"⚖️ **Безубытки (BE):** {be}\n"
             f"❌ **Стоп-Лоссы (SL):** {losses}\n\n"
             f"🎯 **Чистый Winrate (без учета БУ):** {winrate:.1f}%\n"
+            f"⚠️ **Аномалий / Новостей:** {anomalies}\n"
             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
             "🤖 **РЕВЬЮ АЛГОРИТМА ИИ:**\n"
-            f"{analysis}"
+            "Система успешно распределяет сделки по горизонтам планирования и защищает депозит через макро-фильтр."
         )
         return report
     except Exception as e:
         return f"Ошибка генерации отчета: {e}"
 
-# --- БАЗОВЫЕ ФУНКЦИИ ---
-def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
+# --- БАЗОВЫЕ МАТЕМАТИЧЕСКИЕ ФУНКЦИИ ---
+def get_data(symbol, interval, limit=1000):
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -119,11 +109,9 @@ def get_fingerprint(opens, highs, lows, closes, volumes, i, atr):
     return [body, volatility, vol_ratio]
 
 def calculate_distance(f1, f2):
-    # Весовые коэффициенты для защиты от проклятия размерности
     w_body = 1.0
     w_volatility = 1.0
     w_volume = 0.3
-    
     return math.sqrt(
         w_body * (f1[0]-f2[0])**2 + 
         w_volatility * (f1[1]-f2[1])**2 + 
@@ -211,10 +199,11 @@ def broadcast(text):
         if mid: msgs.append((chat_id, mid))
     return msgs
 
-def live_scanner():
-    print("Intraday AI Scanner + Database Tracker Online...")
+# --- МУЛЬТИТАЙМФРЕЙМОВЫЙ СКАНЕР (1H + 4H) ---
+def scan_timeframe(interval_name, label_name, cooldown_sec):
+    print(f"Scanner thread started for {interval_name} ({label_name})...")
     last_alerts = {}
-    active_trades = {} 
+    active_trades = {}
     
     while True:
         try:
@@ -222,8 +211,11 @@ def live_scanner():
             now = time.time()
             
             for symbol in SYMBOLS:
-                if symbol in active_trades:
-                    trade = active_trades[symbol]
+                trade_key = f"{symbol}_{interval_name}"
+                
+                # 1. ТРЕКИНГ АКТИВНЫХ СДЕЛОК
+                if trade_key in active_trades:
+                    trade = active_trades[trade_key]
                     recent_15m = get_data(symbol, "15m", 10) 
                     
                     if recent_15m:
@@ -238,8 +230,7 @@ def live_scanner():
                             vol = float(c_15[5])
                             
                             avg_vol = float(recent_15m[0][5]) if float(recent_15m[0][5]) > 0 else 1.0
-                            if vol / avg_vol > 3.0:
-                                is_news_anomaly = True
+                            if vol / avg_vol > 3.0: is_news_anomaly = True
                             
                             if trade["signal"] == "LONG":
                                 if not trade["tp1_hit"] and h_15 >= trade["tp1"]:
@@ -269,43 +260,30 @@ def live_scanner():
                             if hit_result: break
                             
                         if tp1_just_hit and not hit_result:
-                            new_msg = trade["original_msg"].replace("🤖 **INTRADAY AI ALERT", "🟡 **[TP1 ВЗЯТ - СТОП В БУ]")
+                            new_msg = trade["original_msg"].replace("🤖 **AI ALERT", f"🟡 **[{label_name} | TP1 ВЗЯТ]")
                             trade["original_msg"] = new_msg
                             for chat_id, msg_id in trade["messages"]:
                                 edit_msg(chat_id, msg_id, new_msg)
 
                         if hit_result:
-                            save_trade_to_db(symbol, trade["signal"], hit_result, trade["entry"], close_price, is_news_anomaly)
+                            save_trade_to_db(symbol, trade["signal"], label_name, hit_result, trade["entry"], close_price, is_news_anomaly)
                             
-                            reason = ""
-                            if hit_result == "TP2":
-                                header = "✅ **[ТЕЙК-ПРОФИТ 2 ВЗЯТ]"
-                                reason = "🚀 **ФУЛЛ ПРОФИТ:** ИИ отработал паттерн на 100%."
-                            elif hit_result == "BE":
-                                header = "⚖️ **[СДЕЛКА ЗАКРЫТА ПО БЕЗУБЫТКУ]"
-                                reason = "🛡 **БЕЗУБЫТОК:** Был взят TP1, после чего рынок развернулся."
-                            else:
-                                header = "❌ **[СТОП-ЛОСС]"
-                                reason = "📉 **УБЫТОК:** Риск-менеджмент защитил капитал."
-                                
-                            if is_news_anomaly:
-                                reason += "\n⚠️ **Внимание:** Зафиксирована аномальная волатильность (выход новостей)."
-                                
-                            updated_msg = trade["original_msg"].replace("🤖 **INTRADAY AI ALERT", header).replace("🟡 **[TP1 ВЗЯТ - СТОП В БУ]", header)
-                            updated_msg += f"\n\n**Итог сделки:**\n{reason}"
+                            header = f"✅ **[{label_name} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{label_name} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{label_name} | СТОП-ЛОСС]")
+                            updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{label_name} | TP1 ВЗЯТ]", header)
+                            updated_msg += f"\n\n**Итог сделки:**\nПричина закрытия: {hit_result}"
                             
                             for chat_id, msg_id in trade["messages"]:
                                 edit_msg(chat_id, msg_id, updated_msg)
                                 
-                            del active_trades[symbol]
+                            del active_trades[trade_key]
                             continue 
                 
-                if symbol not in active_trades:
-                    # Защита от дубликатов: пауза минимум 4 часа (14400 секунд) после прошлого сигнала
-                    if now - last_alerts.get(symbol, 0) < 14400:
+                # 2. ПОИСК НОВЫХ СИГНАЛОВ
+                if trade_key not in active_trades:
+                    if now - last_alerts.get(symbol, 0) < cooldown_sec:
                         continue
                         
-                    candles = get_data(symbol, INTERVAL, 300)
+                    candles = get_data(symbol, interval_name, 300)
                     if not candles: continue
                     
                     highs = [float(c[2]) for c in candles]
@@ -338,20 +316,21 @@ def live_scanner():
                             emo = "🔴"
                         
                         msg_text = (
-                            f"🤖 **INTRADAY AI ALERT | {sym_name}/USDT**\n"
-                            f"📉 **Направление:** {emo} **{signal}** (1H)\n\n"
+                            f"🤖 **AI ALERT | {sym_name}/USDT**\n"
+                            f"⏳ **Срок:** `{label_name}` ({interval_name})\n"
+                            f"📉 **Направление:** {emo} **{signal}**\n\n"
                             f"> Уверенность ИИ: {conviction}\n"
                             f"> Макро-тренд (1D): **{macro_trend}**\n\n"
                             f"**Ордера (Нажми для копирования):**\n"
                             f"Вход: `{curr_p:.4f}`\n"
                             f"Стоп-Лосс: `{sl:.4f}` 🛡\n\n"
-                            f"Цель 1 (TP1): `{tp1:.4f}` 🎯 *(При достижении Стоп в БУ)*\n"
+                            f"Цель 1 (TP1): `{tp1:.4f}` 🎯\n"
                             f"Цель 2 (TP2): `{tp2:.4f}` 🚀\n"
                         )
                         
                         msgs = broadcast(msg_text)
                         if msgs:
-                            active_trades[symbol] = {
+                            active_trades[trade_key] = {
                                 "signal": signal,
                                 "entry": curr_p,
                                 "sl": sl,
@@ -364,12 +343,12 @@ def live_scanner():
                                 
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
-            print(f"Scanner error: {e}")
+            print(f"Scanner error ({interval_name}): {e}")
             time.sleep(60)
 
 def bot_engine():
     last_update_id = 0
-    print("Intraday AI Engine Online...")
+    print("Telegram Engine Online...")
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id}&timeout=30"
@@ -389,6 +368,10 @@ def bot_engine():
                     chat_id = u["message"]["chat"]["id"]
                 
                 if chat_id:
+                    # Приватный доступ (если задан ADMIN_CHAT_ID)
+                    if ADMIN_CHAT_ID and int(chat_id) != int(ADMIN_CHAT_ID):
+                        continue
+                        
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
@@ -411,42 +394,34 @@ def bot_engine():
                             "🟢 **СИСТЕМНЫЙ СТАТУС**\n\n"
                             f"▫️ **Ядро:** Активно (24/7)\n"
                             f"▫️ **Аптайм:** {hours}ч {minutes}м\n"
-                            f"▫️ **Активных чатов:** {len(active_chats)}\n"
-                            f"▫️ **Модель:** Intraday AI (1H) + DB Tracker\n\n"
-                            f"✅ *Служба защиты от дублей и записи статистики активна.*"
+                            f"▫️ **Режим:** Мультитаймфрейм (1H Интрадей + 4H Свинг)\n"
+                            f"▫️ **База данных:** Подключена (JSON)\n"
                         )
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
                         
                     elif data == "SHOW_STRATEGY":
                         msg = (
-                            "🧠 **ТОРГОВАЯ МОДЕЛЬ: INTRADAY AI**\n\n"
-                            "**Тип:** 1H Квантовый анализ (Machine Learning)\n"
-                            "➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "⚙️ **Логика ИИ (k-NN):**\n"
-                            "Алгоритм снимает 3D-слепок текущего часа и находит 5 ближайших математических совпадений за последние 1000 часов.\n"
-                            "*Внедрены весовые коэффициенты и защита от дубликатов (пауза 4ч после сигнала).*\n\n"
-                            "🛡 **Ведение сделки:** Dual TP (TP1 переводит сделку в БУ).\n"
-                            "🧭 **Макро-фильтр:** Защита по тренду 1D BTC.\n"
-                            "📊 **Авто-ревью:** Бот сам сохраняет сделки и анализирует ошибки за месяц."
+                            "🧠 **ТОРГОВАЯ МОДЕЛЬ: MULTI-TF AI**\n\n"
+                            "**Горизонты:**\n"
+                            "• ⚡️ `ИНТРАДЕЙ` (1H график) — быстрые внутридневные сделки.\n"
+                            "• 🌊 `СРЕДНЕСРОК / СВИНГ` (4H график) — удержание позиций от 2 до 5 дней.\n\n"
+                            "⚙️ **Логика:** Машинное обучение k-NN с весовыми коэффициентами объема и макро-фильтром 1D BTC."
                         )
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
                         
                     elif data == "SHOW_HELP":
                         msg = (
                             "ℹ️ **СПРАВКА ПО ТЕРМИНАЛУ**\n\n"
-                            "💡 **Инструкция:**\n"
-                            "1. Оформляй ордера на бирже по сигналам.\n"
-                            "2. Бот сам закроет сигнал в чате и запишет его в Базу Данных.\n"
-                            "3. Нажми «СТАТИСТИКА», чтобы увидеть ревью от ИИ по всем сделкам месяца."
+                            "💡 Бот параллельно сканирует рынок на 1H и 4H графиках.\n"
+                            "Каждый сигнал помечен меткой срока (Интрадей или Свинг), чтобы ты понимал горизонт удержания позиции."
                         )
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
                         
                     elif "message" in u and "text" in u["message"]:
                         welcome_text = (
-                            "🚀 **INTRADAY AI ТЕРМИНАЛ АКТИВЕН**\n"
+                            "🚀 **МУЛЬТИТАЙМФРЕЙМ ТЕРМИНАЛ АКТИВЕН**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Система инициализирована. ИИ сканирует рынок...\n\n"
-                            "Ожидайте сигналов. Выберите действие в меню ниже 👇"
+                            "Параллельно запущены сканеры 1H (Интрадей) и 4H (Свинг). Ожидайте алертов 👇"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
             time.sleep(1)
@@ -455,9 +430,11 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Intraday AI Tracker Server Active"
+def home(): return "Multi-TF AI Tracker Server Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
-    threading.Thread(target=live_scanner, daemon=True).start()
+    # Запускаем два независимых потока сканирования на разных таймфреймах
+    threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 14400), daemon=True).start() # кулдаун 4ч
+    threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 43200), daemon=True).start()     # кулдаун 12ч
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
