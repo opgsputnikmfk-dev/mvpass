@@ -119,8 +119,7 @@ def get_fingerprint(opens, highs, lows, closes, volumes, i, atr):
     return [body, volatility, vol_ratio]
 
 def calculate_distance(f1, f2):
-    # ВЕСОВЫЕ КОЭФФИЦИЕНТЫ ИИ: Решение "Проклятия размерности"
-    # Тело и Тени критически важны (вес 1.0). Объем - подтверждающий фактор (вес 0.3)
+    # Весовые коэффициенты для защиты от проклятия размерности
     w_body = 1.0
     w_volatility = 1.0
     w_volume = 0.3
@@ -263,7 +262,7 @@ def live_scanner():
                                 if h_15 >= trade["sl"]:
                                     hit_result = "BE" if trade["tp1_hit"] else "SL"
                                     close_price = trade["sl"]
-                                elif l_15 <= trade["tp2"]:
+                                elif h_15 >= trade["tp2"]:
                                     hit_result = "TP2"
                                     close_price = trade["tp2"]
                                     
@@ -302,6 +301,10 @@ def live_scanner():
                             continue 
                 
                 if symbol not in active_trades:
+                    # Защита от дубликатов: пауза минимум 4 часа (14400 секунд) после прошлого сигнала
+                    if now - last_alerts.get(symbol, 0) < 14400:
+                        continue
+                        
                     candles = get_data(symbol, INTERVAL, 300)
                     if not candles: continue
                     
@@ -316,49 +319,48 @@ def live_scanner():
                     signal, tp_atr_mult, conviction = predict_knn(candles, current_idx, atr, macro_trend)
                     
                     if signal:
-                        if now - last_alerts.get(symbol, 0) > 28800: 
-                            last_alerts[symbol] = now
-                            sym_name = symbol.replace('USDT', '')
-                            
-                            sl_dist = atr * 2.0
-                            tp1_dist = atr * 1.0 
-                            tp2_dist = atr * tp_atr_mult 
-                            
-                            if signal == "LONG":
-                                sl = curr_p - sl_dist
-                                tp1 = curr_p + tp1_dist
-                                tp2 = curr_p + tp2_dist
-                                emo = "🟢"
-                            else:
-                                sl = curr_p + sl_dist
-                                tp1 = curr_p - tp1_dist
-                                tp2 = curr_p - tp2_dist
-                                emo = "🔴"
-                            
-                            msg_text = (
-                                f"🤖 **INTRADAY AI ALERT | {sym_name}/USDT**\n"
-                                f"📉 **Направление:** {emo} **{signal}** (1H)\n\n"
-                                f"> Уверенность ИИ: {conviction}\n"
-                                f"> Макро-тренд (1D): **{macro_trend}**\n\n"
-                                f"**Ордера (Нажми для копирования):**\n"
-                                f"Вход: `{curr_p:.4f}`\n"
-                                f"Стоп-Лосс: `{sl:.4f}` 🛡\n\n"
-                                f"Цель 1 (TP1): `{tp1:.4f}` 🎯 *(При достижении Стоп в БУ)*\n"
-                                f"Цель 2 (TP2): `{tp2:.4f}` 🚀\n"
-                            )
-                            
-                            msgs = broadcast(msg_text)
-                            if msgs:
-                                active_trades[symbol] = {
-                                    "signal": signal,
-                                    "entry": curr_p,
-                                    "sl": sl,
-                                    "tp1": tp1,
-                                    "tp2": tp2,
-                                    "tp1_hit": False,
-                                    "messages": msgs,
-                                    "original_msg": msg_text
-                                }
+                        last_alerts[symbol] = now
+                        sym_name = symbol.replace('USDT', '')
+                        
+                        sl_dist = atr * 2.0
+                        tp1_dist = atr * 1.0 
+                        tp2_dist = atr * tp_atr_mult 
+                        
+                        if signal == "LONG":
+                            sl = curr_p - sl_dist
+                            tp1 = curr_p + tp1_dist
+                            tp2 = curr_p + tp2_dist
+                            emo = "🟢"
+                        else:
+                            sl = curr_p + sl_dist
+                            tp1 = curr_p - tp1_dist
+                            tp2 = curr_p - tp2_dist
+                            emo = "🔴"
+                        
+                        msg_text = (
+                            f"🤖 **INTRADAY AI ALERT | {sym_name}/USDT**\n"
+                            f"📉 **Направление:** {emo} **{signal}** (1H)\n\n"
+                            f"> Уверенность ИИ: {conviction}\n"
+                            f"> Макро-тренд (1D): **{macro_trend}**\n\n"
+                            f"**Ордера (Нажми для копирования):**\n"
+                            f"Вход: `{curr_p:.4f}`\n"
+                            f"Стоп-Лосс: `{sl:.4f}` 🛡\n\n"
+                            f"Цель 1 (TP1): `{tp1:.4f}` 🎯 *(При достижении Стоп в БУ)*\n"
+                            f"Цель 2 (TP2): `{tp2:.4f}` 🚀\n"
+                        )
+                        
+                        msgs = broadcast(msg_text)
+                        if msgs:
+                            active_trades[symbol] = {
+                                "signal": signal,
+                                "entry": curr_p,
+                                "sl": sl,
+                                "tp1": tp1,
+                                "tp2": tp2,
+                                "tp1_hit": False,
+                                "messages": msgs,
+                                "original_msg": msg_text
+                            }
                                 
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
@@ -411,7 +413,7 @@ def bot_engine():
                             f"▫️ **Аптайм:** {hours}ч {minutes}м\n"
                             f"▫️ **Активных чатов:** {len(active_chats)}\n"
                             f"▫️ **Модель:** Intraday AI (1H) + DB Tracker\n\n"
-                            f"✅ *Служба записи статистики в БД работает штатно.*"
+                            f"✅ *Служба защиты от дублей и записи статистики активна.*"
                         )
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
                         
@@ -421,11 +423,11 @@ def bot_engine():
                             "**Тип:** 1H Квантовый анализ (Machine Learning)\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
                             "⚙️ **Логика ИИ (k-NN):**\n"
-                            "Алгоритм снимает 3D-слепок текущего часа (импульс, волатильность, аномалии объема) и находит 5 ближайших математических совпадений за последние 1000 часов.\n"
-                            "*Внедрены весовые коэффициенты для защиты от ценовых аномалий.*\n\n"
+                            "Алгоритм снимает 3D-слепок текущего часа и находит 5 ближайших математических совпадений за последние 1000 часов.\n"
+                            "*Внедрены весовые коэффициенты и защита от дубликатов (пауза 4ч после сигнала).*\n\n"
                             "🛡 **Ведение сделки:** Dual TP (TP1 переводит сделку в БУ).\n"
                             "🧭 **Макро-фильтр:** Защита по тренду 1D BTC.\n"
-                            "📊 **Авто-ревью:** Бот сам сохраняет сделки и анализирует свои ошибки каждый месяц."
+                            "📊 **Авто-ревью:** Бот сам сохраняет сделки и анализирует ошибки за месяц."
                         )
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
                         
