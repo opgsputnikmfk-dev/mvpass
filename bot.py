@@ -14,7 +14,7 @@ start_time = time.time()
 # --- ПАРАМЕТРЫ SWING AI (4H) ---
 INTERVAL = "4h"
 HISTORY_LIMIT = 1000
-SCAN_INTERVAL = 300 # Снизили до 5 минут, чтобы бот быстро фиксировал закрытие сделок
+SCAN_INTERVAL = 300 
 NEIGHBORS = 5
 
 def get_data(symbol, interval=INTERVAL, limit=HISTORY_LIMIT):
@@ -74,17 +74,17 @@ def predict_knn(candles, current_idx, atr, macro_trend):
     
     if ups >= 3 and macro_trend != "BEARISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
-        if ups == 5: conviction = "HIGH (2.0% RISK)"
-        elif ups == 4: conviction = "NORMAL (1.0% RISK)"
-        else: conviction = "LOW (0.5% RISK)"
-        return "LONG", max(1.5, avg_move), conviction
+        if ups == 5: conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)"
+        elif ups == 4: conviction = "⚡️ СРЕДНЯЯ (Риск 1.0%)"
+        else: conviction = "🛡 НИЗКАЯ (Риск 0.5%)"
+        return "LONG", max(1.8, avg_move), conviction
         
     if downs >= 3 and macro_trend != "BULLISH":
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
-        if downs == 5: conviction = "HIGH (2.0% RISK)"
-        elif downs == 4: conviction = "NORMAL (1.0% RISK)"
-        else: conviction = "LOW (0.5% RISK)"
-        return "SHORT", max(1.5, avg_move), conviction
+        if downs == 5: conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)"
+        elif downs == 4: conviction = "⚡️ СРЕДНЯЯ (Риск 1.0%)"
+        else: conviction = "🛡 НИЗКАЯ (Риск 0.5%)"
+        return "SHORT", max(1.8, avg_move), conviction
         
     return None, 0, ""
 
@@ -131,9 +131,9 @@ def broadcast(text):
     return msgs
 
 def live_scanner():
-    print("Swing AI Scanner + Trade Tracker Online...")
+    print("AI Scanner + Advanced Tracker Online...")
     last_alerts = {}
-    active_trades = {} # Храним открытые сделки для трекинга
+    active_trades = {} 
     
     while True:
         try:
@@ -141,44 +141,74 @@ def live_scanner():
             now = time.time()
             
             for symbol in SYMBOLS:
-                # 1. СНАЧАЛА ПРОВЕРЯЕМ ОТКРЫТЫЕ СДЕЛКИ (ТРЕКИНГ)
+                # 1. ТРЕКИНГ АКТИВНЫХ СДЕЛОК
                 if symbol in active_trades:
                     trade = active_trades[symbol]
-                    # Загружаем 15-минутный график для точной проверки зацепа стопов/тейков
                     recent_15m = get_data(symbol, "15m", 10) 
+                    
                     if recent_15m:
                         hit_result = None
+                        tp1_just_hit = False
+                        
                         for c_15 in recent_15m:
                             h_15 = float(c_15[2])
                             l_15 = float(c_15[3])
                             
                             if trade["signal"] == "LONG":
-                                if l_15 <= trade["sl"]: hit_result = "SL"
-                                elif h_15 >= trade["tp"]: hit_result = "TP"
+                                # Проверка TP1
+                                if not trade["tp1_hit"] and h_15 >= trade["tp1"]:
+                                    trade["tp1_hit"] = True
+                                    trade["sl"] = trade["entry"] # Стоп в БУ
+                                    tp1_just_hit = True
+                                    
+                                # Проверка SL / TP2
+                                if l_15 <= trade["sl"]:
+                                    hit_result = "BE" if trade["tp1_hit"] else "SL"
+                                elif h_15 >= trade["tp2"]:
+                                    hit_result = "TP2"
                             else:
-                                if h_15 >= trade["sl"]: hit_result = "SL"
-                                elif l_15 <= trade["tp"]: hit_result = "TP"
-                                
+                                if not trade["tp1_hit"] and l_15 <= trade["tp1"]:
+                                    trade["tp1_hit"] = True
+                                    trade["sl"] = trade["entry"]
+                                    tp1_just_hit = True
+                                    
+                                if h_15 >= trade["sl"]:
+                                    hit_result = "BE" if trade["tp1_hit"] else "SL"
+                                elif l_15 <= trade["tp2"]:
+                                    hit_result = "TP2"
+                                    
                             if hit_result: break
                             
-                        # Если сделка закрылась, редактируем сообщение в Telegram
+                        # Обновление сообщения при взятии TP1
+                        if tp1_just_hit and not hit_result:
+                            new_msg = trade["original_msg"].replace("🤖 **SWING AI ALERT", "🟡 **[TP1 ВЗЯТ - СТОП В БУ]")
+                            trade["original_msg"] = new_msg
+                            for chat_id, msg_id in trade["messages"]:
+                                edit_msg(chat_id, msg_id, new_msg, get_main_keyboard())
+
+                        # Финальное закрытие сделки
                         if hit_result:
                             reason = ""
-                            if hit_result == "TP":
-                                reason = "✅ **PROFIT (ТЕЙК-ПРОФИТ):** Цена успешно достигла расчетной зоны ликвидности. Исторический паттерн отработал идеально, алгоритм зафиксировал прибыль."
+                            if hit_result == "TP2":
+                                header = "✅ **[ТЕЙК-ПРОФИТ 2 ВЗЯТ]"
+                                reason = "🚀 **ФУЛЛ ПРОФИТ:** Цена успешно достигла главной зоны. ИИ отработал паттерн на 100%."
+                            elif hit_result == "BE":
+                                header = "⚖️ **[СДЕЛКА ЗАКРЫТА ПО БЕЗУБЫТКУ]"
+                                reason = "🛡 **БЕЗУБЫТОК:** Был взят TP1, после чего рынок развернулся. Защитный алгоритм спас депозит от убытка."
                             else:
-                                reason = "❌ **STOP-LOSS (УБЫТОК):** Паттерн сломан. Произошел импульсный сквиз или смена локального тренда. Жесткий риск-менеджмент защитил капитал от ликвидации."
+                                header = "❌ **[СТОП-ЛОСС]"
+                                reason = "📉 **УБЫТОК:** Произошел импульсный сквиз, паттерн сломан. Риск-менеджмент защитил капитал."
                                 
-                            updated_msg = trade["original_msg"].replace("[SWING AI ALERT]", f"[{hit_result} HIT - СДЕЛКА ЗАКРЫТА]")
-                            updated_msg += f"\n\n**Аналитика закрытия:**\n{reason}"
+                            updated_msg = trade["original_msg"].replace("🤖 **SWING AI ALERT", header).replace("🟡 **[TP1 ВЗЯТ - СТОП В БУ]", header)
+                            updated_msg += f"\n\n**Итог:**\n{reason}"
                             
                             for chat_id, msg_id in trade["messages"]:
                                 edit_msg(chat_id, msg_id, updated_msg, get_main_keyboard())
                                 
                             del active_trades[symbol]
-                            continue # Переходим к следующей монете
+                            continue 
                 
-                # 2. ЕСЛИ СДЕЛОК НЕТ - ИЩЕМ НОВЫЙ СИГНАЛ
+                # 2. ПОИСК НОВЫХ СИГНАЛОВ
                 if symbol not in active_trades:
                     candles = get_data(symbol, INTERVAL, 300)
                     if not candles: continue
@@ -194,48 +224,46 @@ def live_scanner():
                     signal, tp_atr_mult, conviction = predict_knn(candles, current_idx, atr, macro_trend)
                     
                     if signal:
-                        if now - last_alerts.get(symbol, 0) > 86400: # Пауза 24 часа на одну монету
+                        if now - last_alerts.get(symbol, 0) > 86400: 
                             last_alerts[symbol] = now
                             sym_name = symbol.replace('USDT', '')
                             
                             sl_dist = atr * 2.0
-                            tp_dist = atr * tp_atr_mult
+                            tp1_dist = atr * 1.0 # Консервативный первый тейк
+                            tp2_dist = atr * tp_atr_mult # Основная цель от ИИ
                             
                             if signal == "LONG":
                                 sl = curr_p - sl_dist
-                                tp = curr_p + tp_dist
-                                be_point = curr_p + (atr * 1.0)
+                                tp1 = curr_p + tp1_dist
+                                tp2 = curr_p + tp2_dist
+                                emo = "🟢"
                             else:
                                 sl = curr_p + sl_dist
-                                tp = curr_p - tp_dist
-                                be_point = curr_p - (atr * 1.0)
+                                tp1 = curr_p - tp1_dist
+                                tp2 = curr_p - tp2_dist
+                                emo = "🔴"
                             
                             msg_text = (
-                                "```text\n"
-                                f"[SWING AI ALERT] // {sym_name}USDT\n"
-                                "---------------------------------\n"
-                                f"ACTION:     {signal}\n"
-                                f"TIMEFRAME:  4h\n"
-                                f"ENTRY:      {curr_p:.4f}\n"
-                                f"STOP-LOSS:  {sl:.4f}\n"
-                                f"TAKE-PROFIT: {tp:.4f}\n"
-                                "---------------------------------\n"
-                                f"MOVE SL TO BREAK-EVEN AT: {be_point:.4f}\n"
-                                "---------------------------------\n"
-                                f"BTC 1D MACRO: {macro_trend}\n"
-                                f"RECOMMENDED RISK: {conviction}\n"
-                                f"TIME: {datetime.utcnow().strftime('%H:%M:%S')} UTC\n"
-                                "```"
+                                f"🤖 **SWING AI ALERT | {sym_name}/USDT**\n"
+                                f"📉 **Направление:** {emo} **{signal}** (4H)\n\n"
+                                f"> Уверенность ИИ: {conviction}\n"
+                                f"> Макро-тренд Биткоина: **{macro_trend}**\n\n"
+                                f"**Ордера (Нажми на цифру для копирования):**\n"
+                                f"Вход: `{curr_p:.4f}`\n"
+                                f"Стоп-Лосс: `{sl:.4f}` 🛡\n\n"
+                                f"Цель 1 (TP1): `{tp1:.4f}` 🎯 *(При достижении переведи Стоп в Вход)*\n"
+                                f"Цель 2 (TP2): `{tp2:.4f}` 🚀\n"
                             )
                             
-                            # Отправляем и запоминаем ID сообщений
                             msgs = broadcast(msg_text)
                             if msgs:
                                 active_trades[symbol] = {
                                     "signal": signal,
                                     "entry": curr_p,
                                     "sl": sl,
-                                    "tp": tp,
+                                    "tp1": tp1,
+                                    "tp2": tp2,
+                                    "tp1_hit": False,
                                     "messages": msgs,
                                     "original_msg": msg_text
                                 }
@@ -276,7 +304,7 @@ def bot_engine():
                             f"STATUS: ACTIVE (24/7)\n"
                             f"UPTIME: {hours}h {minutes}m\n"
                             f"ACTIVE CHATS: {len(active_chats)}\n"
-                            f"STRATEGY: Swing AI (4H) + AutoTracker\n"
+                            f"STRATEGY: Swing AI (4H) + Dual TP Tracker\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -287,9 +315,9 @@ def bot_engine():
                             "=== TRADING MODEL: SWING AI ===\n"
                             "TYPE: 4H Institutional Machine Learning\n"
                             "---------------------------------\n"
-                            "The bot captures large market swings. It predicts price action by finding historical matches to current candlestick fingerprints.\n\n"
-                            "[ TRADE TRACKING ]\n"
-                            "Bot continuously monitors active signals. Once TP or SL is hit, the original Telegram message will be dynamically edited with the final trade result and analytics.\n"
+                            "[ DUAL TAKE-PROFIT LOGIC ]\n"
+                            "1. TP1 (Safe): 1.0 ATR. Fast liquidity grab. Secures the trade.\n"
+                            "2. TP2 (Max): Calculated by AI based on historical pattern magnitude.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -298,7 +326,8 @@ def bot_engine():
                         msg = (
                             "```text\n"
                             "=== TERMINAL HELP ===\n"
-                            "You do not need to check the charts. The bot will edit the signal message to [TP HIT] or [SL HIT] automatically when the trade concludes.\n"
+                            "You can click on any price in the signal to copy it directly to your clipboard.\n"
+                            "Bot auto-tracks TP1, TP2, and Break-Even logic.\n"
                             "```"
                         )
                         send_msg(chat_id, msg, get_main_keyboard())
@@ -308,7 +337,7 @@ def bot_engine():
                             "```text\n"
                             "SWING AI TERMINAL ACTIVE\n"
                             "---------------------------------\n"
-                            "System initialized. Trade Auto-Tracking enabled.\n"
+                            "System initialized. Dual TP Auto-Tracking enabled.\n"
                             "```"
                         )
                         send_msg(chat_id, welcome_text, get_main_keyboard())
