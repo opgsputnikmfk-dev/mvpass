@@ -47,7 +47,6 @@ def generate_monthly_report():
         current_month = datetime.utcnow().month
         current_year = datetime.utcnow().year
         
-        # Фильтруем сделки за текущий месяц
         monthly_trades = []
         for t in log:
             dt = datetime.utcfromtimestamp(t['timestamp'])
@@ -64,7 +63,6 @@ def generate_monthly_report():
         
         winrate = (wins / (total - be) * 100) if (total - be) > 0 else 0
         
-        # Автоматическая аналитика проблем
         analysis = ""
         if losses > wins + be:
             analysis += "📉 **Проблема:** Количество убытков превышает прибыль.\n💡 **Предложение:** Макро-фильтр 1D недостаточно сильный. Рассмотрите торговлю только парами с высокой корреляцией к BTC.\n"
@@ -121,7 +119,17 @@ def get_fingerprint(opens, highs, lows, closes, volumes, i, atr):
     return [body, volatility, vol_ratio]
 
 def calculate_distance(f1, f2):
-    return math.sqrt((f1[0]-f2[0])**2 + (f1[1]-f2[1])**2 + (f1[2]-f2[2])**2)
+    # ВЕСОВЫЕ КОЭФФИЦИЕНТЫ ИИ: Решение "Проклятия размерности"
+    # Тело и Тени критически важны (вес 1.0). Объем - подтверждающий фактор (вес 0.3)
+    w_body = 1.0
+    w_volatility = 1.0
+    w_volume = 0.3
+    
+    return math.sqrt(
+        w_body * (f1[0]-f2[0])**2 + 
+        w_volatility * (f1[1]-f2[1])**2 + 
+        w_volume * (f1[2]-f2[2])**2
+    )
 
 def predict_knn(candles, current_idx, atr, macro_trend):
     opens = [float(c[1]) for c in candles]
@@ -215,7 +223,6 @@ def live_scanner():
             now = time.time()
             
             for symbol in SYMBOLS:
-                # 1. ТРЕКИНГ СДЕЛОК И ЗАПИСЬ В БАЗУ ДАННЫХ
                 if symbol in active_trades:
                     trade = active_trades[symbol]
                     recent_15m = get_data(symbol, "15m", 10) 
@@ -231,7 +238,6 @@ def live_scanner():
                             l_15 = float(c_15[3])
                             vol = float(c_15[5])
                             
-                            # Детектор новостей: объем в 3+ раза выше среднего за прошлые часы
                             avg_vol = float(recent_15m[0][5]) if float(recent_15m[0][5]) > 0 else 1.0
                             if vol / avg_vol > 3.0:
                                 is_news_anomaly = True
@@ -269,9 +275,7 @@ def live_scanner():
                             for chat_id, msg_id in trade["messages"]:
                                 edit_msg(chat_id, msg_id, new_msg)
 
-                        # ЗАКРЫТИЕ СДЕЛКИ
                         if hit_result:
-                            # Записываем сделку в БД
                             save_trade_to_db(symbol, trade["signal"], hit_result, trade["entry"], close_price, is_news_anomaly)
                             
                             reason = ""
@@ -297,7 +301,6 @@ def live_scanner():
                             del active_trades[symbol]
                             continue 
                 
-                # 2. ПОИСК НОВЫХ СИГНАЛОВ
                 if symbol not in active_trades:
                     candles = get_data(symbol, INTERVAL, 300)
                     if not candles: continue
@@ -387,7 +390,6 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        # Запрашиваем генерацию авто-отчета из БД
                         report = generate_monthly_report()
                         edit_msg(chat_id, message_id, report, get_main_keyboard())
                         
@@ -416,9 +418,11 @@ def bot_engine():
                     elif data == "SHOW_STRATEGY":
                         msg = (
                             "🧠 **ТОРГОВАЯ МОДЕЛЬ: INTRADAY AI**\n\n"
-                            "**Тип:** 1H Внутридневное Машинное Обучение\n"
+                            "**Тип:** 1H Квантовый анализ (Machine Learning)\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "⚙️ **Логика ИИ:** Поиск паттернов по алгоритму k-NN (5 совпадений).\n"
+                            "⚙️ **Логика ИИ (k-NN):**\n"
+                            "Алгоритм снимает 3D-слепок текущего часа (импульс, волатильность, аномалии объема) и находит 5 ближайших математических совпадений за последние 1000 часов.\n"
+                            "*Внедрены весовые коэффициенты для защиты от ценовых аномалий.*\n\n"
                             "🛡 **Ведение сделки:** Dual TP (TP1 переводит сделку в БУ).\n"
                             "🧭 **Макро-фильтр:** Защита по тренду 1D BTC.\n"
                             "📊 **Авто-ревью:** Бот сам сохраняет сделки и анализирует свои ошибки каждый месяц."
