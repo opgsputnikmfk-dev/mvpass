@@ -1,2 +1,4 @@
 google-genai
 flask
+pandas
+pandas-ta
