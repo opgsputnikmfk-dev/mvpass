@@ -1,4 +1,3 @@
-google-genai
-flask
+Flask
 pandas
-pandas-ta
+numpy
