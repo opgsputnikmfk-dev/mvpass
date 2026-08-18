@@ -3,7 +3,7 @@ import urllib.request, urllib.parse, json, ssl, time, threading, os
 import math
 from datetime import datetime
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = 8299008675  # Твой персональный ID доступа
@@ -30,29 +30,32 @@ def get_memory(symbol):
         return {"min_adx": 20}
 
 def update_memory(symbol, reason):
-    # Если сделка закрылась в безубыток (BE), ИИ повышает требование к силе тренда (ADX) для этой монеты
     if reason in ['BE', 'SL']:
         try:
             mem = {}
             if os.path.exists(MEM_FILE):
                 with open(MEM_FILE, 'r') as f: mem = json.load(f)
             data = mem.get(symbol, {"min_adx": 20})
-            data["min_adx"] = min(35, data["min_adx"] + 1) # Постепенно повышаем порог, максимум до 35
+            data["min_adx"] = min(35, data["min_adx"] + 1)
             mem[symbol] = data
             with open(MEM_FILE, 'w') as f: json.dump(mem, f)
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# --- ТЕХНИЧЕСКИЙ АНАЛИЗ ---
+# --- ТЕХНИЧЕСКИЙ АНАЛИЗ (ЧИСТЫЙ PANDAS БЕЗ ОШИБОК) ---
 def get_advanced_filters(candles):
     df = pd.DataFrame(candles, columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6'])
     df['close'] = df['close'].astype(float)
     df['high'] = df['high'].astype(float)
     df['low'] = df['low'].astype(float)
     
-    ema200 = ta.ema(df['close'], length=200).iloc[-1]
-    adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-    adx = adx_df.iloc[-1, 0] if adx_df is not None and not adx_df.empty else 25.0
+    # Расчет EMA 200 через встроенный pandas
+    ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+    
+    # Упрощенный расчет силы тренда (волатильность / пробой) как аналог ADX
+    high_low = df['high'] - df['low']
+    adx = (high_low.rolling(14).mean() / df['close'].rolling(14).mean() * 1000).iloc[-1]
+    adx = max(10.0, min(50.0, adx)) # Нормализация условного индекса силы
     
     return ema200, adx, df['close'].iloc[-1]
 
@@ -127,13 +130,11 @@ def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
 def predict_knn(candles, symbol, current_idx, atr, macro_trend):
-    # 1. Сначала проверяем тех. анализ и память ИИ по этой монете
     ema200, adx, curr_p = get_advanced_filters(candles)
     mem = get_memory(symbol)
     
-    # Фильтр адаптивного ADX (сила тренда из памяти)
     if adx < mem["min_adx"]: 
-        return None, 0, "", f"🛡 ADX слаб ({adx:.1f} < {mem['min_adx']})"
+        return None, 0, "", f"🛡 Тренд слаб"
 
     opens = [float(c[1]) for c in candles]
     highs = [float(c[2]) for c in candles]
@@ -162,7 +163,6 @@ def predict_knn(candles, symbol, current_idx, atr, macro_trend):
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
-    # Фильтр тренда EMA 200
     is_bullish_trend = curr_p > ema200
     
     if ups >= 3 and macro_trend != "BEARISH" and is_bullish_trend:
@@ -175,7 +175,7 @@ def predict_knn(candles, symbol, current_idx, atr, macro_trend):
         conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if downs == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
         return "SHORT", max(1.5, avg_move), conviction, ""
         
-    return None, 0, "", "🛡 Паттерн не прошел фильтры ТА/ИИ"
+    return None, 0, "", ""
 
 def get_main_keyboard():
     return {
@@ -219,7 +219,6 @@ def broadcast(text):
         if mid: msgs.append((chat_id, mid))
     return msgs
 
-# --- МУЛЬТИТАЙМФРЕЙМОВЫЙ СКАНЕР ---
 def scan_timeframe(interval_name, label_name, cooldown_sec):
     print(f"Scanner thread started for {interval_name} ({label_name})...")
     last_alerts = {}
@@ -286,7 +285,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                         if hit_result:
                             save_trade_to_db(symbol, trade["signal"], label_name, hit_result, trade["entry"], close_price, is_news_anomaly)
-                            update_memory(symbol, hit_result) # ОБУЧЕНИЕ ИИ НА ОШИБКАХ
+                            update_memory(symbol, hit_result)
                             
                             header = f"✅ **[{label_name} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{label_name} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{label_name} | СТОП-ЛОСС]")
                             updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{label_name} | TP1 ВЗЯТ]", header)
@@ -375,10 +374,7 @@ def bot_engine():
             
             for u in updates:
                 last_update_id = u["update_id"] + 1
-                
-                chat_id = None
-                message_id = None
-                data = None
+                chat_id = message_id = data = None
                 
                 if "callback_query" in u:
                     chat_id = u["callback_query"]["message"]["chat"]["id"]
@@ -388,38 +384,24 @@ def bot_engine():
                     chat_id = u["message"]["chat"]["id"]
                 
                 if chat_id:
-                    # ЖЕСТКИЙ ЗАМОК: Принимаем ID только владельца
-                    if int(chat_id) != ADMIN_CHAT_ID:
-                        continue 
-                        
+                    if int(chat_id) != ADMIN_CHAT_ID: continue 
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        report = generate_monthly_report()
-                        edit_msg(chat_id, message_id, report, get_main_keyboard())
+                        edit_msg(chat_id, message_id, generate_monthly_report(), get_main_keyboard())
                     elif data == "SHOW_ASSETS":
                         assets_list = "\n".join([f"🔹 `{s.replace('USDT', '')}`" for s in SYMBOLS])
-                        msg = f"🪙 **МОНИТОРИНГ АКТИВОВ (10)**\n\nАлгоритм анализирует:\n{assets_list}"
-                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🪙 **МОНИТОРИНГ (10)**\n\n{assets_list}", get_main_keyboard())
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
-                        hours, minutes = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        msg = f"🟢 **СТАТУС**\n\nАптайм: {hours}ч {minutes}м\nМультитаймфрейм (1H + 4H) + Память активны."
-                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        msg = "🧠 **СТРАТЕГИЯ:** k-NN ML + EMA 200 + Адаптивный ADX (Самообучение)."
-                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Чистый ТА + Память ошибок.", get_main_keyboard())
                     elif data == "SHOW_HELP":
-                        msg = "ℹ️ **СПРАВКА:** Бот полностью автономен и защищен по твоему ID."
-                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        edit_msg(chat_id, message_id, "ℹ️ Бот работает автономно.", get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
-                        welcome_text = (
-                            "🚀 **ТЕРМИНАЛ АКТИВЕН**\n"
-                            "➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Гибридная система (ИИ + ТА + Память) работает.\n\n"
-                            "Выбери действие в меню 👇"
-                        )
-                        send_msg(chat_id, welcome_text, get_main_keyboard())
+                        send_msg(chat_id, "🚀 **ТЕРМИНАЛ АКТИВЕН**\nВыбери действие 👇", get_main_keyboard())
                         
             time.sleep(1)
         except Exception as e:
@@ -427,7 +409,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Hybrid AI Trading Bot Active"
+def home(): return "AI Trading Bot Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
