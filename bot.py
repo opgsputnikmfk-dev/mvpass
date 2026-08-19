@@ -392,6 +392,14 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                         last_alerts[symbol] = now
                         sym_name = symbol.replace('USDT', '')
                         
+                        # Добавляем хэштеги для удобной фильтрации и поиска в Telegram
+                        if interval_name == "15m":
+                            tag = f"#SCALP #{sym_name} #M15"
+                        elif interval_name == "1h":
+                            tag = f"#INTRADAY #{sym_name} #H1"
+                        else:
+                            tag = f"#SWING #{sym_name} #H4"
+                        
                         sl_dist = atr * 2.0
                         tp1_dist = atr * 1.0 
                         tp2_dist = atr * tp_atr_mult 
@@ -408,7 +416,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             emo = "🔴"
                         
                         msg_text = (
-                            f"🤖 **AI ALERT | {sym_name}/USDT**\n"
+                            f"🤖 **AI ALERT | {sym_name}/USDT**  {tag}\n"
                             f"⏳ **Срок:** `{label_name}` ({interval_name})\n"
                             f"📉 **Направление:** {emo} **{signal}**\n\n"
                             f"> Уверенность ИИ: {conviction}\n"
@@ -502,7 +510,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (15m pure math, H1/H4 Gemini AI enabled)"
+def home(): return "AI Trading Bot Active (15m pure math, H1/H4 Gemini AI enabled with hashtag filtration)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
