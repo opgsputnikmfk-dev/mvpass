@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Белый список доступов (оба твоих ID)
+# Белый список доступов
 ADMIN_CHAT_IDS = {8299008675, 7639836087}
 
 context = ssl._create_unverified_context()
@@ -45,24 +45,23 @@ def update_memory(symbol, interval, reason):
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# --- ТЕХНИЧЕСКИЙ АНАЛИЗ (УМНЫЙ ADX + RSI НА ЧИСТОМ PANDAS) ---
+# --- ТЕХНИЧЕСКИЙ АНАЛИЗ (Анти-Памп + Умный ADX + RSI) ---
 def get_advanced_filters(candles):
     df = pd.DataFrame(candles, columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6'])
-    df['close'] = df['close'].astype(float)
-    df['high'] = df['high'].astype(float)
-    df['low'] = df['low'].astype(float)
+    for col in ['open', 'high', 'low', 'close']:
+        df[col] = df[col].astype(float)
     
     # 1. EMA 200 (Тренд)
     ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     
-    # 2. Умный ADX (Относительная волатильность таймфрейма)
+    # 2. Умный ADX (Относительная волатильность)
     candle_size = (df['high'] - df['low']) / df['close'] * 100
     recent_vol = candle_size.rolling(14).mean().iloc[-1]
     avg_vol = candle_size.rolling(100).mean().iloc[-1]
     adx = (recent_vol / avg_vol) * 20.0 if avg_vol > 0 else 20.0
     adx = max(5.0, min(50.0, adx))
     
-    # 3. Чистый RSI (14) для защиты от покупок на хаях / продаж на дне
+    # 3. Чистый RSI (14)
     delta = df['close'].diff()
     gain = delta.clip(lower=0)
     loss = -1 * delta.clip(upper=0)
@@ -71,7 +70,16 @@ def get_advanced_filters(candles):
     rs = ema_gain / ema_loss
     rsi = (100 - (100 / (1 + rs))).iloc[-1]
     
-    return ema200, adx, rsi, df['close'].iloc[-1]
+    # 4. ПАМП-БЛОК (Защита от входа на аномальных свечах)
+    # Считаем историческую норму размера свечи (без учета текущей летящей свечи)
+    avg_historical_size = candle_size.shift(1).rolling(50).mean().iloc[-1]
+    current_size = candle_size.iloc[-1]
+    
+    is_anomaly = False
+    if avg_historical_size > 0 and (current_size / avg_historical_size) > 2.5:
+        is_anomaly = True
+    
+    return ema200, adx, rsi, is_anomaly, df['close'].iloc[-1]
 
 # --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
@@ -145,8 +153,12 @@ def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
 def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
-    ema200, adx, rsi, curr_p = get_advanced_filters(candles)
+    ema200, adx, rsi, is_anomaly, curr_p = get_advanced_filters(candles)
     mem = get_memory(symbol, interval)
+    
+    # 0. Блокировка входа на вертикальных пампах/дампах
+    if is_anomaly:
+        return None, 0, "", f"🛡 Аномальная свеча (Памп-блок)"
     
     # 1. Проверка силы тренда с учетом памяти ИИ
     if adx < mem["min_adx"]: 
@@ -434,18 +446,19 @@ def bot_engine():
                             "• Если в прошлом после таких ситуаций цена шла вверх (минимум в 3 из 5 случаев), ИИ дает сигнал LONG. Если вниз — SHORT.\n\n"
                             "🛡 **2. ТЕХНИЧЕСКИЕ ФИЛЬТРЫ (ТА)**\n"
                             "• **EMA 200:** Базовый вектор. Выше линии — только покупки, ниже — только продажи.\n"
-                            "• **Умный ADX:** Детектор флэта. Сравнивает волатильность текущих 14 свечей с нормой конкретного таймфрейма. Запрещает торговать, если рынок «мертв».\n"
-                            "• **RSI (14) [Анти-FOMO]:** Блокирует покупки на абсолютных пиках (когда вылетает гигантская зеленая свеча и RSI > 72) и шорты на самом дне (RSI < 28).\n\n"
+                            "• **Умный ADX:** Детектор флэта. Сравнивает волатильность текущих 14 свечей с нормой конкретного таймфрейма.\n"
+                            "• **RSI (14) [Анти-FOMO]:** Блокирует покупки на абсолютных пиках (RSI > 72) и шорты на самом дне (RSI < 28).\n"
+                            "• **Памп-Блок (Аномалии):** Жестко блокирует вход в сделку, если текущая свеча в 2.5+ раза больше исторической нормы.\n\n"
                             "⏱ **3. ТАЙМФРЕЙМЫ И МАКРО-ТРЕНД**\n"
                             "• **1H (Интрадей) и 4H (Свинг):** Строго зависят от дневного (1D) тренда Биткоина. Бот не пойдет против глобального рынка.\n"
-                            "• **15m (Скальпинг):** Изолирован. Торгует локальные движения в обе стороны (Long/Short), ловя быстрые откаты и игнорируя макро-тренд.\n\n"
+                            "• **15m (Скальпинг):** Изолирован. Торгует локальные движения в обе стороны (Long/Short), игнорируя макро-тренд.\n\n"
                             "💾 **4. САМООБУЧЕНИЕ И ПАМЯТЬ**\n"
                             "• Бот ведет «Дневник ошибок» (полностью раздельный для 15m, 1h и 4h).\n"
                             "• Если сделка закрылась по стопу (SL) или в безубыток (BE), бот повышает для этой монеты требования к силе тренда (ADX). Он перестает торговать «шумным» активом до появления железобетонного тренда.\n\n"
                             "⚖️ **5. РИСК-МЕНЕДЖМЕНТ (ATR)**\n"
                             "• Все цели динамические и зависят от текущей волатильности монеты (ATR).\n"
-                            "• **TP1 (Сейв):** Первая цель. При её достижении бот переводит сделку в Безубыток (Стоп-лосс сдвигается на цену входа).\n"
-                            "• **TP2 (Фиксация):** Финальная расчетная цель для закрытия позиции."
+                            "• **TP1 (Сейв):** Первая цель. При её достижении бот переводит сделку в Безубыток.\n"
+                            "• **TP2 (Фиксация):** Финальная расчетная цель."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
