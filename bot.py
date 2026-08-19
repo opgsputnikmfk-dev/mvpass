@@ -6,7 +6,8 @@ import pandas as pd
 import numpy as np
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_CHAT_ID = 8299008675  # Твой персональный ID доступа
+# Белый список доступов (оба твоих ID)
+ADMIN_CHAT_IDS = {8299008675, 7639836087}
 
 context = ssl._create_unverified_context()
 app = Flask(__name__)
@@ -17,7 +18,7 @@ start_time = time.time()
 DB_FILE = "trades_log.json"
 MEM_FILE = "bot_memory.json"
 
-SCAN_INTERVAL = 300 
+SCAN_INTERVAL = 60  # Турбо-режим: бот проверяет рынок каждую минуту
 NEIGHBORS = 5
 
 # --- МОДУЛЬ САМООБУЧЕНИЯ (РАЗДЕЛЬНАЯ ПАМЯТЬ ПО ТАЙМФРЕЙМАМ) ---
@@ -332,7 +333,10 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                     curr_p = closes[current_idx]
                     atr = sum([highs[j] - lows[j] for j in range(current_idx-14, current_idx)]) / 14
                     
-                    signal, tp_atr_mult, conviction, _ = predict_knn(candles, symbol, interval_name, current_idx, atr, macro_trend)
+                    # ИЗОЛЯЦИЯ СКАЛЬПИНГА: Для 15m алгоритм игнорирует макро-тренд
+                    effective_macro = "NEUTRAL" if interval_name == "15m" else macro_trend
+                    
+                    signal, tp_atr_mult, conviction, _ = predict_knn(candles, symbol, interval_name, current_idx, atr, effective_macro)
                     
                     if signal:
                         last_alerts[symbol] = now
@@ -358,7 +362,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             f"⏳ **Срок:** `{label_name}` ({interval_name})\n"
                             f"📉 **Направление:** {emo} **{signal}**\n\n"
                             f"> Уверенность ИИ: {conviction}\n"
-                            f"> Макро-тренд (1D): **{macro_trend}**\n\n"
+                            f"> Макро-тренд (1D): **{effective_macro}**\n\n"
                             f"**Ордера (Нажми для копирования):**\n"
                             f"Вход: `{curr_p:.4f}`\n"
                             f"Стоп-Лосс: `{sl:.4f}` 🛡\n\n"
@@ -405,7 +409,8 @@ def bot_engine():
                     chat_id = u["message"]["chat"]["id"]
                 
                 if chat_id:
-                    if int(chat_id) != ADMIN_CHAT_ID: continue 
+                    # Проверка по белому списку
+                    if int(chat_id) not in ADMIN_CHAT_IDS: continue 
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
@@ -421,21 +426,26 @@ def bot_engine():
                         edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Умный ТА + Изолированная память ИИ.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
-                            "ℹ️ **СПРАВКА ПО АЛГОРИТМУ И ИНСТРУМЕНТАМ**\n"
+                            "ℹ️ **РАЗВЕРНУТАЯ СПРАВКА ПО АРХИТЕКТУРЕ БОТА**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Твой бот — это гибридная система, объединяющая машинное обучение и технический анализ:\n\n"
-                            "1️⃣ **k-NN (Machine Learning):**\n"
-                            "• Сканирует историю свечей и ищет паттерны, наиболее похожие на текущую рыночную ситуацию.\n\n"
-                            "2️⃣ **Технический анализ (Фильтры):**\n"
-                            "• **EMA 200:** Тренд-фильтр (запрещает торговать против глобального движения).\n"
-                            "• **Умный ADX:** Относительно оценивает волатильность таймфрейма, отсекая флэт.\n"
-                            "• **RSI (14):** Анти-FOMO фильтр. Запрещает покупать на абсолютных верхушках (RSI > 72) и продавать на дне (RSI < 28).\n\n"
-                            "3️⃣ **Макро-фильтр:**\n"
-                            "• **BTC 1D SMA 20:** Общий тренд Биткоина.\n\n"
-                            "4️⃣ **Модуль самообучения (Память):**\n"
-                            "• Индивидуально для каждого таймфрейма повышает требования к силе тренда для убыточных монет.\n\n"
-                            "5️⃣ **Риск-менеджмент:**\n"
-                            "• Динамический ATR-стоп с фиксацией цели на TP1 и переводом в безубыток."
+                            "Этот бот — гибридная алгоритмическая система. Он не пытается «угадать» цену, а работает на основе строгой математики, истории и машинного обучения.\n\n"
+                            "🧠 **1. ЯДРО: Машинное обучение (k-NN)**\n"
+                            "• Бот берет текущую рыночную ситуацию (паттерн свечей, объемы) и ищет в истории 5 точно таких же моментов.\n"
+                            "• Если в прошлом после таких ситуаций цена шла вверх (минимум в 3 из 5 случаев), ИИ дает сигнал LONG. Если вниз — SHORT.\n\n"
+                            "🛡 **2. ТЕХНИЧЕСКИЕ ФИЛЬТРЫ (ТА)**\n"
+                            "• **EMA 200:** Базовый вектор. Выше линии — только покупки, ниже — только продажи.\n"
+                            "• **Умный ADX:** Детектор флэта. Сравнивает волатильность текущих 14 свечей с нормой конкретного таймфрейма. Запрещает торговать, если рынок «мертв».\n"
+                            "• **RSI (14) [Анти-FOMO]:** Блокирует покупки на абсолютных пиках (когда вылетает гигантская зеленая свеча и RSI > 72) и шорты на самом дне (RSI < 28).\n\n"
+                            "⏱ **3. ТАЙМФРЕЙМЫ И МАКРО-ТРЕНД**\n"
+                            "• **1H (Интрадей) и 4H (Свинг):** Строго зависят от дневного (1D) тренда Биткоина. Бот не пойдет против глобального рынка.\n"
+                            "• **15m (Скальпинг):** Изолирован. Торгует локальные движения в обе стороны (Long/Short), ловя быстрые откаты и игнорируя макро-тренд.\n\n"
+                            "💾 **4. САМООБУЧЕНИЕ И ПАМЯТЬ**\n"
+                            "• Бот ведет «Дневник ошибок» (полностью раздельный для 15m, 1h и 4h).\n"
+                            "• Если сделка закрылась по стопу (SL) или в безубыток (BE), бот повышает для этой монеты требования к силе тренда (ADX). Он перестает торговать «шумным» активом до появления железобетонного тренда.\n\n"
+                            "⚖️ **5. РИСК-МЕНЕДЖМЕНТ (ATR)**\n"
+                            "• Все цели динамические и зависят от текущей волатильности монеты (ATR).\n"
+                            "• **TP1 (Сейв):** Первая цель. При её достижении бот переводит сделку в Безубыток (Стоп-лосс сдвигается на цену входа).\n"
+                            "• **TP2 (Фиксация):** Финальная расчетная цель для закрытия позиции."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
@@ -453,10 +463,10 @@ if __name__ == "__main__":
     # Запуск Telegram-движка
     threading.Thread(target=bot_engine, daemon=True).start()
     
-    # Запуск 3 независимых потоков сканирования рынка
-    threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 3600), daemon=True).start()
-    threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 14400), daemon=True).start()
-    threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 43200), daemon=True).start()
+    # Запуск 3 независимых потоков сканирования рынка с уменьшенной паузой между сделками
+    threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 900), daemon=True).start()   # 15 минут
+    threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 3600), daemon=True).start()    # 1 час
+    threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 14400), daemon=True).start()      # 4 часа
     
     # Запуск веб-сервера
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
