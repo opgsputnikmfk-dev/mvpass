@@ -42,33 +42,33 @@ def update_memory(symbol, reason):
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# --- ТЕХНИЧЕСКИЙ АНАЛИЗ (ЧИСТЫЙ PANDAS БЕЗ ОШИБОК) ---
+# --- ТЕХНИЧЕСКИЙ АНАЛИЗ (УМНЫЙ ADX + RSI НА ЧИСТОМ PANDAS) ---
 def get_advanced_filters(candles):
     df = pd.DataFrame(candles, columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6'])
     df['close'] = df['close'].astype(float)
     df['high'] = df['high'].astype(float)
     df['low'] = df['low'].astype(float)
     
-    # Расчет EMA 200
+    # 1. EMA 200 (Тренд)
     ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     
-    # Умный ADX (Относительная волатильность, независимая от таймфрейма)
-    # 1. Считаем % размера каждой свечи
+    # 2. Умный ADX (Относительная волатильность таймфрейма)
     candle_size = (df['high'] - df['low']) / df['close'] * 100
-    
-    # 2. Сравниваем текущую активность (14 свечей) с исторической нормой (100 свечей)
     recent_vol = candle_size.rolling(14).mean().iloc[-1]
     avg_vol = candle_size.rolling(100).mean().iloc[-1]
-    
-    # Если волатильность обычная = ADX 20. Если рынок замер (в 2 раза тише) = ADX 10.
-    if avg_vol > 0:
-        adx = (recent_vol / avg_vol) * 20.0
-    else:
-        adx = 20.0
-        
+    adx = (recent_vol / avg_vol) * 20.0 if avg_vol > 0 else 20.0
     adx = max(5.0, min(50.0, adx))
     
-    return ema200, adx, df['close'].iloc[-1]
+    # 3. Чистый RSI (14) для защиты от покупок на хаях / продаж на дне
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -1 * delta.clip(upper=0)
+    ema_gain = gain.ewm(com=13, adjust=False).mean()
+    ema_loss = loss.ewm(com=13, adjust=False).mean()
+    rs = ema_gain / ema_loss
+    rsi = (100 - (100 / (1 + rs))).iloc[-1]
+    
+    return ema200, adx, rsi, df['close'].iloc[-1]
 
 # --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
@@ -107,7 +107,6 @@ def generate_monthly_report():
         
         report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
         
-        # Строгое разделение аналитики по таймфреймам
         for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
             trades = [t for t in monthly_trades if t['timeframe'] == tf]
             total = len(trades)
@@ -143,9 +142,10 @@ def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
 def predict_knn(candles, symbol, current_idx, atr, macro_trend):
-    ema200, adx, curr_p = get_advanced_filters(candles)
+    ema200, adx, rsi, curr_p = get_advanced_filters(candles)
     mem = get_memory(symbol)
     
+    # 1. Проверка силы тренда
     if adx < mem["min_adx"]: 
         return None, 0, "", f"🛡 Тренд слаб"
 
@@ -178,12 +178,18 @@ def predict_knn(candles, symbol, current_idx, atr, macro_trend):
     
     is_bullish_trend = curr_p > ema200
     
+    # 2. Логика LONG + Защита RSI от перекупленности (Анти-FOMO)
     if ups >= 3 and macro_trend != "BEARISH" and is_bullish_trend:
+        if rsi > 72:
+            return None, 0, "", f"🛡 RSI перегрет ({rsi:.1f} > 72)"
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
         conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if ups == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
         return "LONG", max(1.5, avg_move), conviction, ""
         
+    # 3. Логика SHORT + Защита RSI от перепроданности
     if downs >= 3 and macro_trend != "BULLISH" and not is_bullish_trend:
+        if rsi < 28:
+            return None, 0, "", f"🛡 RSI перепродан ({rsi:.1f} < 28)"
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
         conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if downs == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
         return "SHORT", max(1.5, avg_move), conviction, ""
@@ -410,7 +416,7 @@ def bot_engine():
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
                         edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Умный ТА + Память ошибок.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Умный ТА (EMA+ADX+RSI) + Память ошибок.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
                             "ℹ️ **СПРАВКА ПО АЛГОРИТМУ И ИНСТРУМЕНТАМ**\n"
@@ -419,14 +425,15 @@ def bot_engine():
                             "1️⃣ **k-NN (Machine Learning):**\n"
                             "• Сканирует историю свечей и ищет паттерны, наиболее похожие на текущую рыночную ситуацию.\n\n"
                             "2️⃣ **Технический анализ (Фильтры):**\n"
-                            "• **EMA 200 (Экспоненциальная скользящая средняя):** Определяет глобальный тренд. Бот не покупает ниже EMA 200 и не шортит выше неё.\n"
-                            "• **Индекс силы тренда (Умный ADX):** Относительно измеряет волатильность таймфрейма, отсекая флэт, но не блокируя скальпинг.\n\n"
+                            "• **EMA 200:** Тренд-фильтр (запрещает торговать против глобального движения).\n"
+                            "• **Умный ADX:** Относительно оценивает волатильность таймфрейма, отсекая флэт.\n"
+                            "• **RSI (14):** Анти-FOMO фильтр. Запрещает покупать на абсолютных верхушках (RSI > 72) и продавать на дне (RSI < 28).\n\n"
                             "3️⃣ **Макро-фильтр:**\n"
-                            "• **BTC 1D SMA 20:** Анализирует суточный тренд Биткоина, запрещая торговать против общего настроения рынка.\n\n"
+                            "• **BTC 1D SMA 20:** Общий тренд Биткоина.\n\n"
                             "4️⃣ **Модуль самообучения (Память):**\n"
-                            "• Бот фиксирует исходы сделок. Если актив закрывается в безубыток (BE) или стоп (SL), ИИ автоматически повышает требования к силе тренда именно для этой монеты.\n\n"
+                            "• Повышает требования к силе тренда для монет, которые приносят убытки или безубыток.\n\n"
                             "5️⃣ **Риск-менеджмент:**\n"
-                            "• Динамический расчет целей через ATR с фиксацией части прибыли на TP1 и переводом в безубыток."
+                            "• Динамический ATR-стоп с фиксацией цели на TP1 и переводом в безубыток."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
