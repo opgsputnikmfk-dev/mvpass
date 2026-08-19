@@ -95,7 +95,9 @@ def generate_monthly_report():
         if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
         
         report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        for tf in ["⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
+        
+        # Строгое разделение аналитики по таймфреймам
+        for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
             trades = [t for t in monthly_trades if t['timeframe'] == tf]
             total = len(trades)
             if total == 0:
@@ -395,7 +397,7 @@ def bot_engine():
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (1H, 4H).", get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
                         edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Чистый ТА + Память ошибок.", get_main_keyboard())
                     elif data == "SHOW_HELP":
@@ -428,7 +430,13 @@ def bot_engine():
 def home(): return "AI Trading Bot Active"
 
 if __name__ == "__main__":
+    # Запуск Telegram-движка
     threading.Thread(target=bot_engine, daemon=True).start()
+    
+    # Запуск 3 независимых потоков сканирования рынка
+    threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 3600), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 14400), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 43200), daemon=True).start()
+    
+    # Запуск веб-сервера
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
