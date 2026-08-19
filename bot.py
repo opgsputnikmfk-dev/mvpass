@@ -20,24 +20,26 @@ MEM_FILE = "bot_memory.json"
 SCAN_INTERVAL = 300 
 NEIGHBORS = 5
 
-# --- МОДУЛЬ САМООБУЧЕНИЯ (ПАМЯТЬ ИИ) ---
-def get_memory(symbol):
+# --- МОДУЛЬ САМООБУЧЕНИЯ (РАЗДЕЛЬНАЯ ПАМЯТЬ ПО ТАЙМФРЕЙМАМ) ---
+def get_memory(symbol, interval):
+    key = f"{symbol}_{interval}"
     if not os.path.exists(MEM_FILE): return {"min_adx": 10}
     try:
         with open(MEM_FILE, 'r') as f: mem = json.load(f)
-        return mem.get(symbol, {"min_adx": 10})
+        return mem.get(key, {"min_adx": 10})
     except:
         return {"min_adx": 10}
 
-def update_memory(symbol, reason):
+def update_memory(symbol, interval, reason):
+    key = f"{symbol}_{interval}"
     if reason in ['BE', 'SL']:
         try:
             mem = {}
             if os.path.exists(MEM_FILE):
                 with open(MEM_FILE, 'r') as f: mem = json.load(f)
-            data = mem.get(symbol, {"min_adx": 10})
+            data = mem.get(key, {"min_adx": 10})
             data["min_adx"] = min(35, data["min_adx"] + 1)
-            mem[symbol] = data
+            mem[key] = data
             with open(MEM_FILE, 'w') as f: json.dump(mem, f)
         except Exception as e:
             print(f"Memory update error: {e}")
@@ -141,11 +143,11 @@ def get_macro_trend():
 def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
-def predict_knn(candles, symbol, current_idx, atr, macro_trend):
+def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
     ema200, adx, rsi, curr_p = get_advanced_filters(candles)
-    mem = get_memory(symbol)
+    mem = get_memory(symbol, interval)
     
-    # 1. Проверка силы тренда
+    # 1. Проверка силы тренда с учетом памяти ИИ
     if adx < mem["min_adx"]: 
         return None, 0, "", f"🛡 Тренд слаб"
 
@@ -304,7 +306,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                         if hit_result:
                             save_trade_to_db(symbol, trade["signal"], label_name, hit_result, trade["entry"], close_price, is_news_anomaly)
-                            update_memory(symbol, hit_result)
+                            update_memory(symbol, interval_name, hit_result)
                             
                             header = f"✅ **[{label_name} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{label_name} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{label_name} | СТОП-ЛОСС]")
                             updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{label_name} | TP1 ВЗЯТ]", header)
@@ -330,7 +332,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                     curr_p = closes[current_idx]
                     atr = sum([highs[j] - lows[j] for j in range(current_idx-14, current_idx)]) / 14
                     
-                    signal, tp_atr_mult, conviction, _ = predict_knn(candles, symbol, current_idx, atr, macro_trend)
+                    signal, tp_atr_mult, conviction, _ = predict_knn(candles, symbol, interval_name, current_idx, atr, macro_trend)
                     
                     if signal:
                         last_alerts[symbol] = now
@@ -416,7 +418,7 @@ def bot_engine():
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
                         edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Умный ТА (EMA+ADX+RSI) + Память ошибок.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Умный ТА + Изолированная память ИИ.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
                             "ℹ️ **СПРАВКА ПО АЛГОРИТМУ И ИНСТРУМЕНТАМ**\n"
@@ -431,7 +433,7 @@ def bot_engine():
                             "3️⃣ **Макро-фильтр:**\n"
                             "• **BTC 1D SMA 20:** Общий тренд Биткоина.\n\n"
                             "4️⃣ **Модуль самообучения (Память):**\n"
-                            "• Повышает требования к силе тренда для монет, которые приносят убытки или безубыток.\n\n"
+                            "• Индивидуально для каждого таймфрейма повышает требования к силе тренда для убыточных монет.\n\n"
                             "5️⃣ **Риск-менеджмент:**\n"
                             "• Динамический ATR-стоп с фиксацией цели на TP1 и переводом в безубыток."
                         )
