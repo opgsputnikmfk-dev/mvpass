@@ -4,10 +4,14 @@ import math
 from datetime import datetime
 import pandas as pd
 import numpy as np
+from google import genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 # Белый список авторизованных администраторов
 ADMIN_CHAT_IDS = {8299008675, 7639836087}
+
+# Инициализация ИИ-Оракула по новому стандарту
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 context = ssl._create_unverified_context()
 app = Flask(__name__)
@@ -44,6 +48,19 @@ def update_memory(symbol, interval, reason):
             with open(MEM_FILE, 'w') as f: json.dump(mem, f)
         except Exception as e:
             print(f"Memory update error: {e}")
+
+# --- ИИ-ОРАКУЛ (GEMINI ФИЛЬТР РИСКОВ ДЛЯ СТАРШИХ ТФ) ---
+def ask_ai_oracle(symbol, signal, current_price, rsi, adx, recent_closes):
+    try:
+        prompt = f"Ты квантовый риск-менеджер. Анализ входа {signal} по {symbol}. Цена: {current_price}. RSI: {rsi:.1f}. ADX: {adx:.1f}. Последние цены: {recent_closes[-5:]}. Оцени риск отката. Если вход безопасен — 'APPROVE', если есть риск — 'REJECT'. Только одно слово."
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+        )
+        return "APPROVE" in response.text.strip().upper()
+    except Exception as e:
+        print(f"AI Oracle Error: {e}")
+        return True
 
 # --- ТЕХНИЧЕСКИЙ И КВАНТОВЫЙ АНАЛИЗ (3 СИГМЫ + КУЛЬМИНАЦИЯ + RSI + ADX) ---
 def get_advanced_filters(candles, idx):
@@ -88,7 +105,8 @@ def get_advanced_filters(candles, idx):
     is_vol_climax = (df['vol'].iloc[-1] / avg_vol_20 > 4.5) if avg_vol_20 > 0 else False
     
     curr_p = df['close'].iloc[-1]
-    return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p
+    closes_list = df['close'].tolist()
+    return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list
 
 # --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
@@ -162,7 +180,7 @@ def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
 def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
-    ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p = get_advanced_filters(candles, current_idx)
+    ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list = get_advanced_filters(candles, current_idx)
     mem = get_memory(symbol, interval)
     
     # 0. Защита от аномалий и кульминации объема
@@ -201,22 +219,31 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
     is_bullish_trend = curr_p > ema200
+    signal = None
     
     # 2. Логика LONG + Защита 3 Сигм и RSI
     if ups >= 3 and macro_trend != "BEARISH" and is_bullish_trend:
         if rsi > 70 or curr_p >= upper_3sigma:
             return None, 0, "", "🛡 Экстремум 3-Сигм / RSI перегрет"
+        signal = "LONG"
         avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
-        conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if ups == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
-        return "LONG", max(1.5, avg_move), conviction, ""
         
     # 3. Логика SHORT + Защита 3 Сигм и RSI
-    if downs >= 3 and macro_trend != "BULLISH" and not is_bullish_trend:
+    elif downs >= 3 and macro_trend != "BULLISH" and not is_bullish_trend:
         if rsi < 30 or curr_p <= lower_3sigma:
             return None, 0, "", "🛡 Экстремум 3-Сигм / RSI перепродан"
+        signal = "SHORT"
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
-        conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if downs == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
-        return "SHORT", max(1.5, avg_move), conviction, ""
+
+    # Фильтр ИИ-Оракула: Строго выключен для 15m (скальпинг), работает только для 1H и 4H
+    if signal:
+        if interval != "15m":
+            ai_approved = ask_ai_oracle(symbol, signal, curr_p, rsi, adx, closes_list)
+            if not ai_approved:
+                return None, 0, "", "🛡 Отклонено ИИ-Оракулом"
+        
+        conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if (ups == 5 if signal == "LONG" else downs == 5) else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
+        return signal, max(1.5, avg_move), conviction, ""
         
     return None, 0, "", ""
 
@@ -405,7 +432,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                                 "messages": msgs,
                                 "original_msg": msg_text
                             }
-                                
+                            
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
             print(f"Scanner error ({interval_name}): {e}")
@@ -443,28 +470,27 @@ def bot_engine():
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).\n3-Сигма & Confirm-Close активны.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).\nСкальпинг: чистый k-NN. Интрадей/Свинг: гибрид с Gemini AI.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Confirm Close.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Gemini AI (для H1/H4).", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
                             "ℹ️ **СПРАВКА ПО АРХИТЕКТУРЕ И КВАНТОВЫМ ФИЛЬТРАМ**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Бот работает на стыке машинного обучения (k-NN) и квантового статистического анализа:\n\n"
+                            "Бот работает на стыке машинного обучения (k-NN) и нейросетевого анализа рисков:\n\n"
                             "🧠 **1. k-NN Ядро:**\n"
-                            "• Поиск 5 наиболее релевантных фракталов в истории рынка с расчетом вероятности движения.\n\n"
-                            "📐 **2. Квантовый фильтр 3-х Сигм (3-Sigma):**\n"
-                            "• Математический закон нормального распределения ($99.7\%$ движений внутри $3\\sigma$). Запрещает покупки у верхней границы и шорты у нижней.\n\n"
-                            "📊 **3. Фильтр кульминации объемов (Volume Climax):**\n"
-                            "• Блокирует сделки при аномальном всплеске объема ($> 4.5\\times$), предотвращая вход в момент распределения позиции маркетмейкером.\n\n"
-                            "🕯 **4. Подтверждение свечи (Confirm Close):**\n"
-                            "• Для 1H и 4H сигналы формируются строго по **закрытым свечам**, исключая вход на внутричасовых ложных фитилях.\n\n"
-                            "🛡 **5. Многоуровневые фильтры ТА:**\n"
-                            "• **EMA 200:** Определение долгосрочного тренда.\n"
-                            "• **Умный ADX:** Адаптивная оценка волатильности.\n"
-                            "• **RSI (14):** Защита от перекупленности и перепроданности.\n\n"
+                            "• Поиск 5 наиболее релевантных фракталов в истории рынка.\n\n"
+                            "⚡️ **2. Режимы работы таймфреймов:**\n"
+                            "• **Скальпинг (15m):** Молниеносный анализ на чистой математике без задержек на ИИ.\n"
+                            "• **Интрадей / Свинг (1H, 4H):** Финальная проверка через Gemini AI-Оракула.\n\n"
+                            "📐 **3. Квантовый фильтр 3-х Сигм (3-Sigma):**\n"
+                            "• Математический закон нормального распределения.\n\n"
+                            "📊 **4. Фильтр кульминации объемов (Volume Climax):**\n"
+                            "• Блокирует сделки при аномальном всплеске объема ($> 4.5\\times$).\n\n"
+                            "🕯 **5. Подтверждение свечи (Confirm Close):**\n"
+                            "• Для 1H и 4H сигналы формируются строго по закрытым свечам.\n\n"
                             "💾 **6. Изолированная адаптивная память:**\n"
-                            "• Раздельная калибровка порогов входа для 15m, 1H и 4H при получении убытка или выхода в безубыток."
+                            "• Раздельная калибровка порогов входа по каждому инструменту."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
@@ -476,7 +502,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (3-Sigma & Volume Climax Enabled)"
+def home(): return "AI Trading Bot Active (15m pure math, H1/H4 Gemini AI enabled)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
