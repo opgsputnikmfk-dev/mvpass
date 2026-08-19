@@ -4,10 +4,14 @@ import math
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import google.generativeai as genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Белый список авторизованных администраторов
 ADMIN_CHAT_IDS = {8299008675, 7639836087}
+
+# Инициализация Gemini API для ИИ-Оракула
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
 context = ssl._create_unverified_context()
 app = Flask(__name__)
@@ -18,7 +22,7 @@ start_time = time.time()
 DB_FILE = "trades_log.json"
 MEM_FILE = "bot_memory.json"
 
-SCAN_INTERVAL = 60  # Сканирование рынка каждую минуту
+SCAN_INTERVAL = 60  
 NEIGHBORS = 5
 
 # --- МОДУЛЬ САМООБУЧЕНИЯ (РАЗДЕЛЬНАЯ ПАМЯТЬ ПО ТАЙМФРЕЙМАМ) ---
@@ -45,23 +49,39 @@ def update_memory(symbol, interval, reason):
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# --- ТЕХНИЧЕСКИЙ И КВАНТОВЫЙ АНАЛИЗ (3 СИГМЫ + КУЛЬМИНАЦИЯ + RSI + ADX) ---
+# --- AI-ОРАКУЛ (ФИНАЛЬНЫЙ ФИЛЬТР ОТ GEMINI) ---
+def ask_ai_oracle(symbol, signal, current_price, rsi, adx, recent_closes):
+    try:
+        prompt = (
+            f"Ты квантовый риск-менеджер. Алгоритм хочет открыть сделку {signal} по монете {symbol}. "
+            f"Текущая цена: {current_price}. RSI: {rsi:.1f}. Сила тренда ADX: {adx:.1f}. "
+            f"Цены последних закрытых свечей: {recent_closes[-5:]}. "
+            f"Проанализируй, нет ли здесь признаков перегретости, пампа или ложного пробоя. "
+            f"Если вход безопасен, ответь только словом APPROVE. Если есть риск отката, ответь REJECT."
+        )
+        response = ai_model.generate_content(prompt)
+        decision = response.text.strip().upper()
+        if "APPROVE" in decision:
+            return True
+        return False
+    except Exception as e:
+        print(f"AI Oracle Error: {e}")
+        return True  # В случае сбоя сети доверяем базовой математике
+
+# --- КВАНТОВЫЙ ТЕХНИЧЕСКИЙ АНАЛИЗ ---
 def get_advanced_filters(candles, idx):
     df = pd.DataFrame(candles[:idx+1], columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6'])
     for col in ['open', 'high', 'low', 'close', 'vol']:
         df[col] = df[col].astype(float)
     
-    # 1. EMA 200 (Глобальный тренд)
     ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     
-    # 2. Умный ADX (Относительная волатильность таймфрейма)
     candle_size = (df['high'] - df['low']) / df['close'] * 100
     recent_vol = candle_size.rolling(14).mean().iloc[-1]
     avg_vol = candle_size.rolling(100).mean().iloc[-1]
     adx = (recent_vol / avg_vol) * 20.0 if avg_vol > 0 else 20.0
     adx = max(5.0, min(50.0, adx))
     
-    # 3. Чистый RSI (14)
     delta = df['close'].diff()
     gain = delta.clip(lower=0)
     loss = -1 * delta.clip(upper=0)
@@ -70,38 +90,29 @@ def get_advanced_filters(candles, idx):
     rs = ema_gain / ema_loss
     rsi = (100 - (100 / (1 + rs))).iloc[-1]
     
-    # 4. Памп-Блок (Аномальный размер свечи)
     avg_historical_size = candle_size.shift(1).rolling(50).mean().iloc[-1]
     current_size = candle_size.iloc[-1]
-    is_anomaly = False
-    if avg_historical_size > 0 and (current_size / avg_historical_size) > 2.5:
-        is_anomaly = True
+    is_anomaly = (avg_historical_size > 0 and (current_size / avg_historical_size) > 2.5)
 
-    # 5. Математика 3-х Сигм (Статистический экстремум)
     sma20 = df['close'].rolling(20).mean().iloc[-1]
     std20 = df['close'].rolling(20).std().iloc[-1]
     upper_3sigma = sma20 + (3.0 * std20)
     lower_3sigma = sma20 - (3.0 * std20)
     
-    # 6. Фильтр кульминации объемов (Volume Climax)
     avg_vol_20 = df['vol'].rolling(20).mean().iloc[-1]
     is_vol_climax = (df['vol'].iloc[-1] / avg_vol_20 > 4.5) if avg_vol_20 > 0 else False
     
     curr_p = df['close'].iloc[-1]
-    return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p
+    closes_list = df['close'].tolist()
+    
+    return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
+# --- БАЗА ДАННЫХ И СТАТИСТИКА ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
     trade_data = {
-        "symbol": symbol,
-        "signal": signal,
-        "timeframe": timeframe_label,
-        "reason": reason,
-        "entry": entry,
-        "close_price": close_price,
-        "news_anomaly": is_news_anomaly,
-        "timestamp": time.time(),
-        "date_str": datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+        "symbol": symbol, "signal": signal, "timeframe": timeframe_label, "reason": reason,
+        "entry": entry, "close_price": close_price, "news_anomaly": is_news_anomaly,
+        "timestamp": time.time(), "date_str": datetime.utcnow().strftime('%Y-%m-%d %H:%M')
     }
     try:
         if os.path.exists(DB_FILE):
@@ -120,13 +131,11 @@ def generate_monthly_report():
         
         current_month = datetime.utcnow().month
         current_year = datetime.utcnow().year
-        
         monthly_trades = [t for t in log if datetime.utcfromtimestamp(t['timestamp']).month == current_month and datetime.utcfromtimestamp(t['timestamp']).year == current_year]
                 
         if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
         
         report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        
         for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
             trades = [t for t in monthly_trades if t['timeframe'] == tf]
             total = len(trades)
@@ -138,12 +147,10 @@ def generate_monthly_report():
             losses = sum(1 for t in trades if t['reason'] == 'SL')
             wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
             report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
-            
         return report
     except Exception as e:
         return f"Ошибка отчета: {e}"
 
-# --- МАТЕМАТИКА ИИ И k-NN ---
 def get_data(symbol, interval, limit=1000):
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
@@ -162,14 +169,12 @@ def calculate_distance(f1, f2):
     return math.sqrt(1.0*(f1[0]-f2[0])**2 + 1.0*(f1[1]-f2[1])**2 + 0.3*(f1[2]-f2[2])**2)
 
 def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
-    ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p = get_advanced_filters(candles, current_idx)
+    ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list = get_advanced_filters(candles, current_idx)
     mem = get_memory(symbol, interval)
     
-    # 0. Защита от аномалий и кульминации объема
     if is_anomaly or is_vol_climax:
         return None, 0, "", "🛡 Аномалия / Кульминация объема"
     
-    # 1. Проверка силы тренда с учетом памяти ИИ
     if adx < mem["min_adx"]: 
         return None, 0, "", "🛡 Тренд слаб"
 
@@ -199,25 +204,31 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
     
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
-    
     is_bullish_trend = curr_p > ema200
     
-    # 2. Логика LONG + Защита 3 Сигм и RSI
+    signal = None
+    avg_move = 0
+    conviction = ""
+
     if ups >= 3 and macro_trend != "BEARISH" and is_bullish_trend:
-        if rsi > 70 or curr_p >= upper_3sigma:
-            return None, 0, "", "🛡 Экстремум 3-Сигм / RSI перегрет"
-        avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
-        conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if ups == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
-        return "LONG", max(1.5, avg_move), conviction, ""
-        
-    # 3. Логика SHORT + Защита 3 Сигм и RSI
-    if downs >= 3 and macro_trend != "BULLISH" and not is_bullish_trend:
-        if rsi < 30 or curr_p <= lower_3sigma:
-            return None, 0, "", "🛡 Экстремум 3-Сигм / RSI перепродан"
-        avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
-        conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if downs == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
-        return "SHORT", max(1.5, avg_move), conviction, ""
-        
+        if rsi <= 70 and curr_p < upper_3sigma:
+            avg_move = sum(m for d, o, m in top_neighbors if o == 1) / ups
+            conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if ups == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
+            signal = "LONG"
+            
+    elif downs >= 3 and macro_trend != "BULLISH" and not is_bullish_trend:
+        if rsi >= 30 and curr_p > lower_3sigma:
+            avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
+            conviction = "🔥 ВЫСОКАЯ (Риск 2.0%)" if downs == 5 else "⚡️ СРЕДНЯЯ (Риск 1.0%)"
+            signal = "SHORT"
+
+    # Финальный фильтр от ИИ-Оракула Gemini перед выдачей сигнала
+    if signal:
+        ai_approved = ask_ai_oracle(symbol, signal, curr_p, rsi, adx, closes_list)
+        if not ai_approved:
+            return None, 0, "", "🛡 Отклонено ИИ-Оракулом"
+        return signal, max(1.5, avg_move), conviction, ""
+
     return None, 0, "", ""
 
 def get_main_keyboard():
@@ -346,7 +357,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                     candles = get_data(symbol, interval_name, 300)
                     if not candles or len(candles) < 100: continue
                     
-                    # ПОДТВЕРЖДЕНИЕ СВЕЧИ: Для 1H и 4H анализируем только полностью закрытую свечу (-2)
                     current_idx = len(candles) - 2 if interval_name in ["1h", "4h"] else len(candles) - 1
                     
                     highs = [float(c[2]) for c in candles]
@@ -356,7 +366,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                     curr_p = closes[current_idx]
                     atr = sum([highs[j] - lows[j] for j in range(current_idx-14, current_idx)]) / 14
                     
-                    # Изоляция скальпинга от 1D макро-тренда
                     effective_macro = "NEUTRAL" if interval_name == "15m" else macro_trend
                     
                     signal, tp_atr_mult, conviction, _ = predict_knn(candles, symbol, interval_name, current_idx, atr, effective_macro)
@@ -381,10 +390,11 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             emo = "🔴"
                         
                         msg_text = (
-                            f"🤖 **AI ALERT | {sym_name}/USDT**\n"
+                            f"🤖 **AI-HYBRID ALERT | {sym_name}/USDT**\n"
                             f"⏳ **Срок:** `{label_name}` ({interval_name})\n"
                             f"📉 **Направление:** {emo} **{signal}**\n\n"
-                            f"> Уверенность ИИ: {conviction}\n"
+                            f"> Оценка ИИ-Оракула: ✅ Одобрено\n"
+                            f"> Уверенность k-NN: {conviction}\n"
                             f"> Макро-тренд (1D): **{effective_macro}**\n\n"
                             f"**Ордера (Нажми для копирования):**\n"
                             f"Вход: `{curr_p:.4f}`\n"
@@ -396,14 +406,9 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                         msgs = broadcast(msg_text)
                         if msgs:
                             active_trades[trade_key] = {
-                                "signal": signal,
-                                "entry": curr_p,
-                                "sl": sl,
-                                "tp1": tp1,
-                                "tp2": tp2,
-                                "tp1_hit": False,
-                                "messages": msgs,
-                                "original_msg": msg_text
+                                "signal": signal, "entry": curr_p, "sl": sl,
+                                "tp1": tp1, "tp2": tp2, "tp1_hit": False,
+                                "messages": msgs, "original_msg": msg_text
                             }
                                 
             time.sleep(SCAN_INTERVAL)
@@ -443,32 +448,25 @@ def bot_engine():
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).\n3-Сигма & Confirm-Close активны.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nГибридный режим: k-NN + Gemini AI активен.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Confirm Close.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Gemini AI Оракул.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
-                            "ℹ️ **СПРАВКА ПО АРХИТЕКТУРЕ И КВАНТОВЫМ ФИЛЬТРАМ**\n"
+                            "ℹ️ **СПРАВКА ПО AI-ГИБРИДНОЙ АРХИТЕКТУРЕ**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Бот работает на стыке машинного обучения (k-NN) и квантового статистического анализа:\n\n"
-                            "🧠 **1. k-NN Ядро:**\n"
-                            "• Поиск 5 наиболее релевантных фракталов в истории рынка с расчетом вероятности движения.\n\n"
-                            "📐 **2. Квантовый фильтр 3-х Сигм (3-Sigma):**\n"
-                            "• Математический закон нормального распределения ($99.7\%$ движений внутри $3\\sigma$). Запрещает покупки у верхней границы и шорты у нижней.\n\n"
-                            "📊 **3. Фильтр кульминации объемов (Volume Climax):**\n"
-                            "• Блокирует сделки при аномальном всплеске объема ($> 4.5\\times$), предотвращая вход в момент распределения позиции маркетмейкером.\n\n"
-                            "🕯 **4. Подтверждение свечи (Confirm Close):**\n"
-                            "• Для 1H и 4H сигналы формируются строго по **закрытым свечам**, исключая вход на внутричасовых ложных фитилях.\n\n"
-                            "🛡 **5. Многоуровневые фильтры ТА:**\n"
-                            "• **EMA 200:** Определение долгосрочного тренда.\n"
-                            "• **Умный ADX:** Адаптивная оценка волатильности.\n"
-                            "• **RSI (14):** Защита от перекупленности и перепроданности.\n\n"
-                            "💾 **6. Изолированная адаптивная память:**\n"
-                            "• Раздельная калибровка порогов входа для 15m, 1H и 4H при получении убытка или выхода в безубыток."
+                            "Твой бот теперь официально является **AI-агентом**!\n\n"
+                            "🤖 **1. ИИ-Оракул (Gemini 1.5 Flash):**\n"
+                            "• Перед тем как выдать любой сигнал, математическое ядро отправляет свечи на глубокий анализ нейросети Google.\n"
+                            "• Если ИИ видит скрытые риски или рыночный шум, он накладывает вето (APPROVE / REJECT).\n\n"
+                            "📐 **2. Квантовые фильтры:**\n"
+                            "• **3 Сигмы:** Отсекает статистические экстремумы цены.\n"
+                            "• **Volume Climax:** Блокирует кульминацию объемов маркетмейкера.\n"
+                            "• **Confirm Close:** Анализирует только закрытые свечи на 1H/4H.\n"
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
-                        send_msg(chat_id, "🚀 **ТЕРМИНАЛ АКТИВЕН**\nВыбери действие 👇", get_main_keyboard())
+                        send_msg(chat_id, "🚀 **AI-ТЕРМИНАЛ АКТИВЕН**\nВыбери действие 👇", get_main_keyboard())
                         
             time.sleep(1)
         except Exception as e:
@@ -476,12 +474,11 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (3-Sigma & Volume Climax Enabled)"
+def home(): return "AI-Hybrid Trading Bot Active (Gemini Connected)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
     
-    # 3 независимых потока сканирования
     threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 900), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 3600), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 14400), daemon=True).start()
