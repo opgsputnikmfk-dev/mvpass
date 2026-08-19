@@ -412,4 +412,23 @@ def bot_engine():
                             "• **BTC 1D SMA 20:** Анализирует суточный тренд Биткоина, запрещая торговать против общего настроения рынка.\n\n"
                             "4️⃣ **Модуль самообучения (Память):**\n"
                             "• Бот фиксирует исходы сделок. Если актив закрывается в безубыток (BE) или стоп (SL), ИИ автоматически повышает требования к силе тренда именно для этой монеты.\n\n"
-            
+                            "5️⃣ **Риск-менеджмент:**\n"
+                            "• Динамический расчет целей через ATR (волатильность) с фиксацией части прибыли на TP1 и переводом в безубыток."
+                        )
+                        edit_msg(chat_id, message_id, help_text, get_main_keyboard())
+                    elif "message" in u and "text" in u["message"]:
+                        send_msg(chat_id, "🚀 **ТЕРМИНАЛ АКТИВЕН**\nВыбери действие 👇", get_main_keyboard())
+                        
+            time.sleep(1)
+        except Exception as e:
+            print(f"Engine error: {e}")
+            time.sleep(10)
+
+@app.route('/')
+def home(): return "AI Trading Bot Active"
+
+if __name__ == "__main__":
+    threading.Thread(target=bot_engine, daemon=True).start()
+    threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 14400), daemon=True).start()
+    threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 43200), daemon=True).start()
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
