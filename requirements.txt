@@ -1,4 +1,4 @@
-Flask
+google-genai
 pandas
 numpy
-google-generativeai
+flask
