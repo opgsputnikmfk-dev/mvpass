@@ -22,12 +22,12 @@ NEIGHBORS = 5
 
 # --- МОДУЛЬ САМООБУЧЕНИЯ (ПАМЯТЬ ИИ) ---
 def get_memory(symbol):
-    if not os.path.exists(MEM_FILE): return {"min_adx": 20}
+    if not os.path.exists(MEM_FILE): return {"min_adx": 10}
     try:
         with open(MEM_FILE, 'r') as f: mem = json.load(f)
-        return mem.get(symbol, {"min_adx": 20})
+        return mem.get(symbol, {"min_adx": 10})
     except:
-        return {"min_adx": 20}
+        return {"min_adx": 10}
 
 def update_memory(symbol, reason):
     if reason in ['BE', 'SL']:
@@ -35,7 +35,7 @@ def update_memory(symbol, reason):
             mem = {}
             if os.path.exists(MEM_FILE):
                 with open(MEM_FILE, 'r') as f: mem = json.load(f)
-            data = mem.get(symbol, {"min_adx": 20})
+            data = mem.get(symbol, {"min_adx": 10})
             data["min_adx"] = min(35, data["min_adx"] + 1)
             mem[symbol] = data
             with open(MEM_FILE, 'w') as f: json.dump(mem, f)
@@ -49,11 +49,13 @@ def get_advanced_filters(candles):
     df['high'] = df['high'].astype(float)
     df['low'] = df['low'].astype(float)
     
+    # Расчет EMA 200
     ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
     
-    high_low = df['high'] - df['low']
-    adx = (high_low.rolling(14).mean() / df['close'].rolling(14).mean() * 1000).iloc[-1]
-    adx = max(10.0, min(50.0, adx))
+    # Улучшенный и более чувствительный аналог ADX (Volatility % Index)
+    atr_pct = ((df['high'] - df['low']).rolling(14).mean() / df['close']) * 100
+    adx = atr_pct.iloc[-1] * 10 
+    adx = max(5.0, min(50.0, adx))
     
     return ema200, adx, df['close'].iloc[-1]
 
@@ -93,7 +95,7 @@ def generate_monthly_report():
         if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
         
         report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        for tf in ["⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
+        for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
             trades = [t for t in monthly_trades if t['timeframe'] == tf]
             total = len(trades)
             if total == 0:
@@ -393,7 +395,7 @@ def bot_engine():
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
                         edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + Чистый ТА + Память ошибок.", get_main_keyboard())
                     elif data == "SHOW_HELP":
@@ -427,6 +429,7 @@ def home(): return "AI Trading Bot Active"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
+    threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 3600), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 14400), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("4h", "🌊 СВИНГ", 43200), daemon=True).start()
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
