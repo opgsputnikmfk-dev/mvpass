@@ -7,10 +7,8 @@ import numpy as np
 from google import genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Белый список авторизованных администраторов
 ADMIN_CHAT_IDS = {8299008675, 7639836087}
 
-# Инициализация ИИ-Оракула по новому стандарту
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 context = ssl._create_unverified_context()
@@ -22,10 +20,10 @@ start_time = time.time()
 DB_FILE = "trades_log.json"
 MEM_FILE = "bot_memory.json"
 
-SCAN_INTERVAL = 60  # Сканирование рынка каждую минуту
+SCAN_INTERVAL = 60
 NEIGHBORS = 5
+SCALP_ENABLED = True  # Глобальный переключатель скальпинга
 
-# --- МОДУЛЬ САМООБУЧЕНИЯ (РАЗДЕЛЬНАЯ ПАМЯТЬ ПО ТАЙМФРЕЙМАМ) ---
 def get_memory(symbol, interval):
     key = f"{symbol}_{interval}"
     if not os.path.exists(MEM_FILE): return {"min_adx": 10}
@@ -49,7 +47,6 @@ def update_memory(symbol, interval, reason):
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# --- ИИ-ОРАКУЛ (GEMINI ФИЛЬТР РИСКОВ ДЛЯ СТАРШИХ ТФ) ---
 def ask_ai_oracle(symbol, signal, current_price, rsi, adx, recent_closes):
     try:
         prompt = f"Ты квантовый риск-менеджер. Анализ входа {signal} по {symbol}. Цена: {current_price}. RSI: {rsi:.1f}. ADX: {adx:.1f}. Последние цены: {recent_closes[-5:]}. Оцени риск отката. Если вход безопасен — 'APPROVE', если есть риск — 'REJECT'. Только одно слово."
@@ -62,7 +59,6 @@ def ask_ai_oracle(symbol, signal, current_price, rsi, adx, recent_closes):
         print(f"AI Oracle Error: {e}")
         return True
 
-# --- АНАЛИЗ БИРЖЕВОГО СТАКАНА (ORDER BOOK IMBALANCE) ---
 def check_order_book(symbol, signal_type):
     url = f"https://data-api.binance.vision/api/v3/depth?symbol={symbol}&limit=20"
     try:
@@ -70,32 +66,27 @@ def check_order_book(symbol, signal_type):
         with urllib.request.urlopen(req, context=context, timeout=5) as r:
             depth = json.loads(r.read().decode())
             
-        bids = sum([float(item[1]) for item in depth.get("bids", [])]) # Объём на покупку
-        asks = sum([float(item[1]) for item in depth.get("asks", [])]) # Объём на продажу
+        bids = sum([float(item[1]) for item in depth.get("bids", [])])
+        asks = sum([float(item[1]) for item in depth.get("asks", [])])
         
         if asks == 0: return True
         ratio = bids / asks
         
-        # Для LONG перевес покупателей в стакане
         if signal_type == "LONG" and ratio >= 0.85:
             return True
-        # Для SHORT преобладание продавцов в стакане
         elif signal_type == "SHORT" and ratio <= 1.15:
             return True
-            
         return False
     except Exception as e:
         print(f"Order Book Error for {symbol}: {e}")
-        return True # При сбое сети не блокируем торговлю
+        return True
 
-# --- ТЕХНИЧЕСКИЙ И КВАНТОВЫЙ АНАЛИЗ (3 СИГМЫ + КУЛЬМИНАЦИЯ + RSI + ADX) ---
 def get_advanced_filters(candles, idx):
     df = pd.DataFrame(candles[:idx+1], columns=['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6'])
     for col in ['open', 'high', 'low', 'close', 'vol']:
         df[col] = df[col].astype(float)
     
     ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
-    
     candle_size = (df['high'] - df['low']) / df['close'] * 100
     recent_vol = candle_size.rolling(14).mean().iloc[-1]
     avg_vol = candle_size.rolling(100).mean().iloc[-1]
@@ -128,7 +119,6 @@ def get_advanced_filters(candles, idx):
     closes_list = df['close'].tolist()
     return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ И СТАТИСТИКИ ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly):
     trade_data = {
         "symbol": symbol, "signal": signal, "timeframe": timeframe_label,
@@ -150,16 +140,11 @@ def generate_monthly_report():
     try:
         if not os.path.exists(DB_FILE): return "📭 База данных пуста. Сделок в этом месяце еще не было."
         with open(DB_FILE, 'r') as f: log = json.load(f)
-        
-        current_month = datetime.utcnow().month
-        current_year = datetime.utcnow().year
-        
+        current_month, current_year = datetime.utcnow().month, datetime.utcnow().year
         monthly_trades = [t for t in log if datetime.utcfromtimestamp(t['timestamp']).month == current_month and datetime.utcfromtimestamp(t['timestamp']).year == current_year]
-                
         if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
         
         report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        
         for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
             trades = [t for t in monthly_trades if t['timeframe'] == tf]
             total = len(trades)
@@ -171,12 +156,10 @@ def generate_monthly_report():
             losses = sum(1 for t in trades if t['reason'] == 'SL')
             wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
             report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
-            
         return report
     except Exception as e:
         return f"Ошибка отчета: {e}"
 
-# --- МАТЕМАТИКА ИИ И k-NN ---
 def get_data(symbol, interval, limit=1000):
     url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
@@ -247,11 +230,9 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
 
     if signal:
-        # Проверка биржевого стакана (Order Book Imbalance) для всех ТФ
         if not check_order_book(symbol, signal):
             return None, 0, "", "🛡 Стакан против сделки (Дисбаланс)"
 
-        # Фильтр ИИ-Оракула только для старших ТФ (H1, 4H)
         if interval != "15m":
             ai_approved = ask_ai_oracle(symbol, signal, curr_p, rsi, adx, closes_list)
             if not ai_approved:
@@ -263,9 +244,11 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
     return None, 0, "", ""
 
 def get_main_keyboard():
+    scalp_status = "🟢 ВКЛ" if SCALP_ENABLED else "🔴 ВЫКЛ"
     return {
         "inline_keyboard": [
             [{"text": "📊 СТАТИСТИКА И ПАМЯТЬ ИИ", "callback_data": "SHOW_STATS"}],
+            [{"text": f"⏱ СКАЛЬПИНГ: {scalp_status}", "callback_data": "TOGGLE_SCALP"}],
             [{"text": "🪙 МОНИТОРИНГ", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 СТАТУС БОТА", "callback_data": "BOT_STATUS"}],
             [{"text": "🧠 СТРАТЕГИЯ", "callback_data": "SHOW_STRATEGY"},
@@ -311,10 +294,18 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
     
     while True:
         try:
+            # Если скальпинг выключен пользователем через кнопку, поток 15m «спит»
+            if interval_name == "15m" and not SCALP_ENABLED:
+                time.sleep(10)
+                continue
+
             macro_trend = get_macro_trend()
             now = time.time()
             
             for symbol in SYMBOLS:
+                if interval_name == "15m" and not SCALP_ENABLED:
+                    break
+
                 trade_key = f"{symbol}_{interval_name}"
                 
                 if trade_key in active_trades:
@@ -485,26 +476,26 @@ def bot_engine():
                     
                     if data == "SHOW_STATS":
                         edit_msg(chat_id, message_id, generate_monthly_report(), get_main_keyboard())
+                    elif data == "TOGGLE_SCALP":
+                        global SCALP_ENABLED
+                        SCALP_ENABLED = not SCALP_ENABLED
+                        status_text = "🟢 Скальпинг (15m) активирован!" if SCALP_ENABLED else "🔴 Скальпинг (15m) отключен."
+                        edit_msg(chat_id, message_id, f"{status_text}\n\nВыбери действие 👇", get_main_keyboard())
                     elif data == "SHOW_ASSETS":
                         assets_list = "\n".join([f"🔹 `{s.replace('USDT', '')}`" for s in SYMBOLS])
                         edit_msg(chat_id, message_id, f"🪙 **МОНИТОРИНГ (10)**\n\n{assets_list}", get_main_keyboard())
                     elif data == "BOT_STATUS":
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСистема активна (15m, 1H, 4H).\nk-NN, Order Book & Gemini AI активны.", get_main_keyboard())
+                        scalp_state = "ВКЛ" if SCALP_ENABLED else "ВЫКЛ"
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСкальпинг (15m): [{scalp_state}]\nИнтрадей/Свинг (1H/4H): Активны.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Order Book Imbalance + Gemini AI.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Order Book + Gemini AI.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
-                            "ℹ️ **СПРАВКА ПО АРХИТЕКТУРЕ И КВАНТОВЫМ ФИЛЬТРАМ**\n"
+                            "ℹ️ **СПРАВКА ПО УПРАВЛЕНИЮ**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "Бот работает на стыке машинного обучения и order-flow анализа:\n\n"
-                            "🧠 **1. k-NN Ядро:** Поиск 5 релевантных фракталов.\n"
-                            "🟢 **2. Order Book Imbalance:** Анализ дисбаланса стакана (Bids/Asks).\n"
-                            "🤖 **3. ИИ-Оракул (Gemini):** Проверка старших таймфреймов (1H, 4H).\n"
-                            "📐 **4. Квантовый фильтр 3-х Сигм (3-Sigma).**\n"
-                            "📊 **5. Volume Climax:** Фильтр аномального объема.\n"
-                            "🕯 **6. Confirm Close:** Подтверждение закрытия свечи."
+                            "• Нажимай кнопку **«⏱ СКАЛЬПИНГ»**, чтобы моментально включать или выключать поток 15-минутных сигналов прямо из Telegram!"
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
@@ -523,7 +514,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Order Book & k-NN Integrated)"
+def home(): return "AI Trading Bot Active (Scalp Toggle Enabled)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
