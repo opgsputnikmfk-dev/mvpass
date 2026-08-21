@@ -298,37 +298,51 @@ def broadcast(text):
         if mid: msgs.append((chat_id, mid))
     return msgs
 
-# --- БЫСТРЫЙ ПОТОК КОНТРОЛЯ СДЕЛОК В РЕАЛЬНОМ ВРЕМЕНИ ---
+# --- БЫСТРЫЙ ПОТОК КОНТРОЛЯ СДЕЛОК В РЕАЛЬНОМ ВРЕМЕНИ (С ЗАЩИТОЙ ЭКСТРЕМУМОВ) ---
 def trade_monitor():
     print("Trade Monitor Thread Online...")
     while True:
         try:
             for key, trade in list(active_trades.items()):
-                price = get_current_price(trade["symbol"])
+                # Авто-очистка сделок, которые висят дольше 12 часов (защита от вечного зависания)
+                if time.time() - trade.get("timestamp", time.time()) > 43200:
+                    del active_trades[key]
+                    continue
+
+                symbol = trade["symbol"]
+                price = get_current_price(symbol)
                 if not price: continue
                 
+                # Подтягиваем свежие 1-минутные свечи для проверки реального High / Low свечи во время пампа
+                candles_1m = get_data(symbol, "1m", 3)
+                curr_high = price
+                curr_low = price
+                if candles_1m:
+                    curr_high = max(price, float(candles_1m[-1][2]))
+                    curr_low = min(price, float(candles_1m[-1][3]))
+
                 hit_result = None
                 tp1_just_hit = False
                 
                 if trade["signal"] == "LONG":
-                    if not trade["tp1_hit"] and price >= trade["tp1"]:
+                    if not trade["tp1_hit"] and (price >= trade["tp1"] or curr_high >= trade["tp1"]):
                         trade["tp1_hit"] = True
                         trade["sl"] = trade["entry"]  # Перевод в безубыток
                         tp1_just_hit = True
                         
-                    if price <= trade["sl"]:
+                    if price <= trade["sl"] or curr_low <= trade["sl"]:
                         hit_result = "BE" if trade["tp1_hit"] else "SL"
-                    elif price >= trade["tp2"]:
+                    elif price >= trade["tp2"] or curr_high >= trade["tp2"]:
                         hit_result = "TP2"
                 else:  # SHORT
-                    if not trade["tp1_hit"] and price <= trade["tp1"]:
+                    if not trade["tp1_hit"] and (price <= trade["tp1"] or curr_low <= trade["tp1"]):
                         trade["tp1_hit"] = True
                         trade["sl"] = trade["entry"]  # Перевод в безубыток
                         tp1_just_hit = True
                         
-                    if price >= trade["sl"]:
+                    if price >= trade["sl"] or curr_high >= trade["sl"]:
                         hit_result = "BE" if trade["tp1_hit"] else "SL"
-                    elif price <= trade["tp2"]:
+                    elif price <= trade["tp2"] or curr_low <= trade["tp2"]:
                         hit_result = "TP2"
                 
                 # Если только что пробили TP1 — мгновенно обновляем сообщение в телеграме
@@ -340,12 +354,13 @@ def trade_monitor():
 
                 # Если сработал итоговый Тейк 2, Безубыток или Стоп-Лосс
                 if hit_result:
-                    save_trade_to_db(trade["symbol"], trade["signal"], trade["label_name"], hit_result, trade["entry"], price)
+                    close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
+                    save_trade_to_db(trade["symbol"], trade["signal"], trade["label_name"], hit_result, trade["entry"], close_price)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
                     
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
                     updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
-                    updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{price:.4f}`"
+                    updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{close_price:.4f}`"
                     
                     for chat_id, msg_id in trade["messages"]:
                         edit_msg(chat_id, msg_id, updated_msg)
@@ -377,7 +392,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                 trade_key = f"{symbol}_{interval_name}"
                 
-                # Активные сделки теперь обрабатываются быстрым потоком trade_monitor, здесь пропускаем их поиск
+                # Активные сделки обрабатываются быстрым потоком trade_monitor, здесь пропускаем их поиск
                 if trade_key in active_trades:
                     continue
                 
@@ -451,7 +466,8 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             "tp2": tp2,
                             "tp1_hit": False,
                             "messages": msgs,
-                            "original_msg": msg_text
+                            "original_msg": msg_text,
+                            "timestamp": time.time()
                         }
                         
             time.sleep(SCAN_INTERVAL)
@@ -499,14 +515,14 @@ def bot_engine():
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
                         scalp_state = "ВКЛ" if SCALP_ENABLED else "ВЫКЛ"
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСкальпинг (15m): [{scalp_state}]\nИнтрадей/Свинг (1H/4H): Активны.\nМониторинг цен (Ticker): Каждые 2 сек.", get_main_keyboard())
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСкальпинг (15m): [{scalp_state}]\nИнтрадей/Свинг (1H/4H): Активны.\nМониторинг цен (Ticker + High/Low): Каждые 2 сек.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
                         edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Order Book + Gemini AI.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
                             "ℹ️ **СПРАВКА ПО УПРАВЛЕНИЮ**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "• Мгновенная фиксация тейков по рыночной цене.\n"
+                            "• Мгновенная фиксация тейков по экстремумам свечей.\n"
                             "• Переключатель скальпинга прямо в меню."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
@@ -526,12 +542,12 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Real-Time Ticker Monitor & Scalp Toggle)"
+def home(): return "AI Trading Bot Active (Real-Time High/Low Monitor & Scalp Toggle)"
 
 if __name__ == "__main__":
     # Запуск фоновых потоков
     threading.Thread(target=bot_engine, daemon=True).start()
-    threading.Thread(target=trade_monitor, daemon=True).start()  # <-- Мгновенная проверка тейков по цене
+    threading.Thread(target=trade_monitor, daemon=True).start()  # <-- Мгновенная проверка тейков по цене и High/Low
     
     threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 900), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 3600), daemon=True).start()
