@@ -6,8 +6,12 @@ import pandas as pd
 import numpy as np
 from google import genai
 
+# --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_IDS = {8299008675}
+SIGNAL_CHANNEL_ID = os.getenv("SIGNAL_CHANNEL_ID")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -18,14 +22,78 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 active_trades = {}  # Глобальный словарь активных сделок для быстрого мониторинга
 start_time = time.time()
-DB_FILE = "trades_log.json"
 MEM_FILE = "bot_memory.json"
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
 SCALP_ENABLED = True  # Глобальный переключатель скальпинга
 
-# --- ФУНКЦИЯ БЫСТРОГО ПОЛУЧЕНИЯ ЦЕНЫ ---
+# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) ---
+def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Supabase credentials missing!")
+        return
+    
+    url = f"{SUPABASE_URL}/rest/v1/trades"
+    trade_data = {
+        "symbol": symbol, "signal": signal, "timeframe": timeframe_label,
+        "reason": reason, "entry": entry, "close_price": close_price,
+        "news_anomaly": is_news_anomaly, "timestamp": time.time(),
+        "date_str": datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+    }
+    
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    
+    try:
+        req = urllib.request.Request(url, data=json.dumps(trade_data).encode('utf-8'), headers=headers, method="POST")
+        urllib.request.urlopen(req, context=context, timeout=10)
+    except Exception as e:
+        print(f"Supabase DB Save Error: {e}")
+
+def generate_monthly_report():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return "📭 Ошибка подключения к базе данных Supabase."
+    
+    url = f"{SUPABASE_URL}/rest/v1/trades?select=*"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=context, timeout=10) as r:
+            log = json.loads(r.read().decode())
+            
+        if not log: return "📭 База данных пуста. Сделок еще не было."
+        
+        current_month, current_year = datetime.utcnow().month, datetime.utcnow().year
+        monthly_trades = [t for t in log if datetime.utcfromtimestamp(t['timestamp']).month == current_month and datetime.utcfromtimestamp(t['timestamp']).year == current_year]
+        
+        if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
+        
+        report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ (Supabase)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
+            trades = [t for t in monthly_trades if t['timeframe'] == tf]
+            total = len(trades)
+            if total == 0:
+                report += f"**{tf}:** Нет сделок\n"
+                continue
+            wins = sum(1 for t in trades if t['reason'] == 'TP2')
+            be = sum(1 for t in trades if t['reason'] == 'BE')
+            losses = sum(1 for t in trades if t['reason'] == 'SL')
+            wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
+            report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
+        return report
+    except Exception as e:
+        return f"Ошибка отчета Supabase: {e}"
+
+# --- ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ И СЕТИ ---
 def get_current_price(symbol):
     url = f"https://data-api.binance.vision/api/v3/ticker/price?symbol={symbol}"
     try:
@@ -35,6 +103,49 @@ def get_current_price(symbol):
     except: 
         return None
 
+def get_data(symbol, interval, limit=1000):
+    url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=context, timeout=15) as r: return json.loads(r.read().decode())
+    except: return []
+
+def send_msg(chat_id, text, keyboard=None):
+    if not TELEGRAM_TOKEN: return None
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if keyboard: data["reply_markup"] = keyboard
+    try:
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, context=context, timeout=10) as r:
+            return json.loads(r.read().decode()).get("result", {}).get("message_id")
+    except Exception as e:
+        print(f"Send error: {e}")
+        return None
+
+def send_to_channel(text):
+    if SIGNAL_CHANNEL_ID:
+        send_msg(SIGNAL_CHANNEL_ID, text)
+
+def edit_msg(chat_id, message_id, text, keyboard=None):
+    if not TELEGRAM_TOKEN: return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+    data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
+    if keyboard: data["reply_markup"] = keyboard
+    try:
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, context=context, timeout=10)
+    except Exception as e:
+        print(f"Edit error: {e}")
+
+def broadcast(text):
+    msgs = []
+    for chat_id in active_chats:
+        mid = send_msg(chat_id, text) 
+        if mid: msgs.append((chat_id, mid))
+    return msgs
+
+# --- ИНТЕЛЛЕКТУАЛЬНЫЕ ФУНКЦИИ И ФИЛЬТРЫ ---
 def get_memory(symbol, interval):
     key = f"{symbol}_{interval}"
     if not os.path.exists(MEM_FILE): return {"min_adx": 10}
@@ -130,54 +241,6 @@ def get_advanced_filters(candles, idx):
     closes_list = df['close'].tolist()
     return ema200, adx, rsi, is_anomaly, is_vol_climax, upper_3sigma, lower_3sigma, curr_p, closes_list
 
-def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
-    trade_data = {
-        "symbol": symbol, "signal": signal, "timeframe": timeframe_label,
-        "reason": reason, "entry": entry, "close_price": close_price,
-        "news_anomaly": is_news_anomaly, "timestamp": time.time(),
-        "date_str": datetime.utcnow().strftime('%Y-%m-%d %H:%M')
-    }
-    try:
-        if os.path.exists(DB_FILE):
-            with open(DB_FILE, 'r') as f: log = json.load(f)
-        else:
-            log = []
-        log.append(trade_data)
-        with open(DB_FILE, 'w') as f: json.dump(log, f)
-    except Exception as e:
-        print(f"DB Error: {e}")
-
-def generate_monthly_report():
-    try:
-        if not os.path.exists(DB_FILE): return "📭 База данных пуста. Сделок в этом месяце еще не было."
-        with open(DB_FILE, 'r') as f: log = json.load(f)
-        current_month, current_year = datetime.utcnow().month, datetime.utcnow().year
-        monthly_trades = [t for t in log if datetime.utcfromtimestamp(t['timestamp']).month == current_month and datetime.utcfromtimestamp(t['timestamp']).year == current_year]
-        if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
-        
-        report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
-            trades = [t for t in monthly_trades if t['timeframe'] == tf]
-            total = len(trades)
-            if total == 0:
-                report += f"**{tf}:** Нет сделок\n"
-                continue
-            wins = sum(1 for t in trades if t['reason'] == 'TP2')
-            be = sum(1 for t in trades if t['reason'] == 'BE')
-            losses = sum(1 for t in trades if t['reason'] == 'SL')
-            wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
-            report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
-        return report
-    except Exception as e:
-        return f"Ошибка отчета: {e}"
-
-def get_data(symbol, interval, limit=1000):
-    url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, context=context, timeout=15) as r: return json.loads(r.read().decode())
-    except: return []
-
 def get_macro_trend():
     btc_1d = get_data("BTCUSDT", "1d", 50)
     if not btc_1d: return "NEUTRAL"
@@ -266,37 +329,6 @@ def get_main_keyboard():
              {"text": "ℹ️ СПРАВКА", "callback_data": "SHOW_HELP"}]
         ]
     }
-
-def send_msg(chat_id, text, keyboard=None):
-    if not TELEGRAM_TOKEN: return None
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if keyboard: data["reply_markup"] = keyboard
-    try:
-        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, context=context, timeout=10) as r:
-            return json.loads(r.read().decode()).get("result", {}).get("message_id")
-    except Exception as e:
-        print(f"Send error: {e}")
-        return None
-
-def edit_msg(chat_id, message_id, text, keyboard=None):
-    if not TELEGRAM_TOKEN: return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-    data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "Markdown"}
-    if keyboard: data["reply_markup"] = keyboard
-    try:
-        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-        urllib.request.urlopen(req, context=context, timeout=10)
-    except Exception as e:
-        print(f"Edit error: {e}")
-
-def broadcast(text):
-    msgs = []
-    for chat_id in active_chats:
-        mid = send_msg(chat_id, text) 
-        if mid: msgs.append((chat_id, mid))
-    return msgs
 
 # --- БЫСТРЫЙ ПОТОК КОНТРОЛЯ СДЕЛОК В РЕАЛЬНОМ ВРЕМЕНИ (С ЗАЩИТОЙ ЭКСТРЕМУМОВ) ---
 def trade_monitor():
@@ -454,6 +486,8 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                     )
                     
                     msgs = broadcast(msg_text)
+                    send_to_channel(msg_text)  # Автоматический постинг в канал сигналов
+                    
                     if msgs:
                         active_trades[trade_key] = {
                             "symbol": symbol,
@@ -542,7 +576,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Real-Time High/Low Monitor & Scalp Toggle)"
+def home(): return "AI Trading Bot Active (Real-Time High/Low Monitor & Scalp Toggle & Supabase)"
 
 if __name__ == "__main__":
     # Запуск фоновых потоков
