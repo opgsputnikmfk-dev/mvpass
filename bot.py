@@ -7,7 +7,7 @@ import numpy as np
 from google import genai
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_CHAT_IDS = {8299008675, 7639836087}
+ADMIN_CHAT_IDS = {8299008675}
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
