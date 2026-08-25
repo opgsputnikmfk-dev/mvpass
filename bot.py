@@ -28,10 +28,10 @@ SCAN_INTERVAL = 60
 NEIGHBORS = 5
 SCALP_ENABLED = True  # Глобальный переключатель скальпинга
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) ---
+# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) С ДИАГНОСТИКОЙ ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("Supabase credentials missing!")
+        print("❌ ОШИБКА: SUPABASE_URL или SUPABASE_KEY не заданы в переменных Render!")
         return
     
     url = f"{SUPABASE_URL}/rest/v1/trades"
@@ -51,9 +51,13 @@ def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price
     
     try:
         req = urllib.request.Request(url, data=json.dumps(trade_data).encode('utf-8'), headers=headers, method="POST")
-        urllib.request.urlopen(req, context=context, timeout=10)
+        with urllib.request.urlopen(req, context=context, timeout=10) as response:
+            print(f"✅ УСПЕХ: Сделка {symbol} ({reason}) записана в Supabase!")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        print(f"❌ ОШИБКА HTTP от Supabase ({e.code}): {error_body}")
     except Exception as e:
-        print(f"Supabase DB Save Error: {e}")
+        print(f"❌ ОБЩАЯ ОШИБКА сохранения в Supabase: {e}")
 
 def generate_monthly_report():
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -424,6 +428,10 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
             for symbol in SYMBOLS:
                 if interval_name == "15m" and not SCALP_ENABLED:
                     break
+
+                # НОВАЯ ПРОВЕРКА: Если по этой монете уже есть активная сделка на любом таймфрейме — пропускаем
+                if any(t["symbol"] == symbol for t in active_trades.values()):
+                    continue
 
                 trade_key = f"{symbol}_{interval_name}"
                 
