@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 active_chats = set()
-active_trades = {}  # Глобальный словарь активных сделок для быстрого мониторинга
+active_trades = {}  # Глобальный словарь активных сделок
 start_time = time.time()
 MEM_FILE = "bot_memory.json"
 
@@ -28,18 +28,23 @@ SCAN_INTERVAL = 60
 NEIGHBORS = 5
 SCALP_ENABLED = True  # Глобальный переключатель скальпинга
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) С ДИАГНОСТИКОЙ ---
+# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ ОШИБКА: SUPABASE_URL или SUPABASE_KEY не заданы в переменных Render!")
+        print("❌ ОШИБКА SUPABASE: Не заданы URL или KEY в переменных среды Render!")
         return
     
     url = f"{SUPABASE_URL}/rest/v1/trades"
     trade_data = {
-        "symbol": symbol, "signal": signal, "timeframe": timeframe_label,
-        "reason": reason, "entry": entry, "close_price": close_price,
-        "news_anomaly": is_news_anomaly, "timestamp": time.time(),
-        "date_str": datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+        "symbol": symbol, 
+        "signal": signal, 
+        "timeframe": timeframe_label,
+        "reason": reason, 
+        "entry": float(entry), 
+        "close_price": float(close_price),
+        "news_anomaly": is_news_anomaly, 
+        "timestamp": float(time.time()),
+        "date_str": datetime.now().strftime('%Y-%m-%d %H:%M')
     }
     
     headers = {
@@ -52,12 +57,12 @@ def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price
     try:
         req = urllib.request.Request(url, data=json.dumps(trade_data).encode('utf-8'), headers=headers, method="POST")
         with urllib.request.urlopen(req, context=context, timeout=10) as response:
-            print(f"✅ УСПЕХ: Сделка {symbol} ({reason}) записана в Supabase!")
+            print(f"✅ УСПЕХ ЗАПИСИ В DB: {symbol} | Сделка закрыта по [{reason}] | Вход: {entry} -> Выход: {close_price}")
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
-        print(f"❌ ОШИБКА HTTP от Supabase ({e.code}): {error_body}")
+        print(f"❌ ОШИБКА HTTP ОТ SUPABASE ({e.code}): {error_body}")
     except Exception as e:
-        print(f"❌ ОБЩАЯ ОШИБКА сохранения в Supabase: {e}")
+        print(f"❌ СБОЙ СОХРАНЕНИЯ СДЕЛКИ В SUPABASE: {e}")
 
 def generate_monthly_report():
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -74,23 +79,18 @@ def generate_monthly_report():
         with urllib.request.urlopen(req, context=context, timeout=10) as r:
             log = json.loads(r.read().decode())
             
-        if not log: return "📭 База данных пуста. Сделок еще не было."
+        if not log: return "📭 База данных пуста. Закрытых сделок еще нет."
         
-        current_month, current_year = datetime.utcnow().month, datetime.utcnow().year
-        monthly_trades = [t for t in log if datetime.utcfromtimestamp(t['timestamp']).month == current_month and datetime.utcfromtimestamp(t['timestamp']).year == current_year]
-        
-        if not monthly_trades: return "📭 В текущем месяце закрытых сделок пока нет."
-        
-        report = "📊 **СТАТИСТИКА И САМОАНАЛИЗ ИИ (Supabase)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+        report = "📊 **ОБЩАЯ СТАТИСТИКА ИИ (Supabase)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
         for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
-            trades = [t for t in monthly_trades if t['timeframe'] == tf]
+            trades = [t for t in log if t.get('timeframe') == tf]
             total = len(trades)
             if total == 0:
                 report += f"**{tf}:** Нет сделок\n"
                 continue
-            wins = sum(1 for t in trades if t['reason'] == 'TP2')
-            be = sum(1 for t in trades if t['reason'] == 'BE')
-            losses = sum(1 for t in trades if t['reason'] == 'SL')
+            wins = sum(1 for t in trades if t.get('reason') == 'TP2')
+            be = sum(1 for t in trades if t.get('reason') == 'BE')
+            losses = sum(1 for t in trades if t.get('reason') == 'SL')
             wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
             report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
         return report
@@ -293,7 +293,6 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
     ups = sum(1 for d, o, m in top_neighbors if o == 1)
     downs = sum(1 for d, o, m in top_neighbors if o == -1)
     
-    # Ослабленные параметры для 4h (более отзывчивый таймфрейм)
     is_4h = (interval == "4h")
     required_neighbors = 2 if is_4h else 3
     
@@ -340,13 +339,12 @@ def get_main_keyboard():
         ]
     }
 
-# --- БЫСТРЫЙ ПОТОК КОНТРОЛЯ СДЕЛОК В РЕАЛЬНОМ ВРЕМЕНИ (С ЗАЩИТОЙ ЭКСТРЕМУМОВ) ---
+# --- БЫСТРЫЙ ПОТОК КОНТРОЛЯ СДЕЛОК В РЕАЛЬНОМ ВРЕМЕНИ ---
 def trade_monitor():
     print("Trade Monitor Thread Online...")
     while True:
         try:
             for key, trade in list(active_trades.items()):
-                # Авто-очистка сделок, которые висят дольше 12 часов (защита от вечного зависания)
                 if time.time() - trade.get("timestamp", time.time()) > 43200:
                     del active_trades[key]
                     continue
@@ -355,7 +353,6 @@ def trade_monitor():
                 price = get_current_price(symbol)
                 if not price: continue
                 
-                # Подтягиваем свежие 1-минутные свечи для проверки реального High / Low свечи во время пампа
                 candles_1m = get_data(symbol, "1m", 3)
                 curr_high = max(price, float(candles_1m[-1][2])) if candles_1m else price
                 curr_low = min(price, float(candles_1m[-1][3])) if candles_1m else price
@@ -366,7 +363,7 @@ def trade_monitor():
                 if trade["signal"] == "LONG":
                     if not trade["tp1_hit"] and (price >= trade["tp1"] or curr_high >= trade["tp1"]):
                         trade["tp1_hit"] = True
-                        trade["sl"] = trade["entry"]  # Перевод в безубыток
+                        trade["sl"] = trade["entry"]
                         tp1_just_hit = True
                         
                     if price <= trade["sl"] or curr_low <= trade["sl"]:
@@ -376,7 +373,7 @@ def trade_monitor():
                 else:  # SHORT
                     if not trade["tp1_hit"] and (price <= trade["tp1"] or curr_low <= trade["tp1"]):
                         trade["tp1_hit"] = True
-                        trade["sl"] = trade["entry"]  # Перевод в безубыток
+                        trade["sl"] = trade["entry"]
                         tp1_just_hit = True
                         
                     if price >= trade["sl"] or curr_high >= trade["sl"]:
@@ -384,14 +381,12 @@ def trade_monitor():
                     elif price <= trade["tp2"] or curr_low <= trade["tp2"]:
                         hit_result = "TP2"
                 
-                # Если только что пробили TP1 — мгновенно обновляем сообщение везде
                 if tp1_just_hit and not hit_result:
                     new_msg = trade["original_msg"].replace("🤖 **AI ALERT", f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]")
                     trade["original_msg"] = new_msg
                     for chat_id, msg_id in trade["messages"]:
                         edit_msg(chat_id, msg_id, new_msg)
 
-                # Если сработал итоговый Тейк 2, Безубыток или Стоп-Лосс
                 if hit_result:
                     close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
                     save_trade_to_db(trade["symbol"], trade["signal"], trade["label_name"], hit_result, trade["entry"], close_price)
@@ -409,9 +404,9 @@ def trade_monitor():
         except Exception as e:
             print(f"Trade monitor error: {e}")
         
-        time.sleep(2)  # Проверка цен каждые 2 секунды
+        time.sleep(2)
 
-# --- ПОТОК СКАНИРОВАНИЯ РЫНКА ---
+# --- ПОТОК СКАНИРОВАНИЯ РЫНКА (СНЯТЫ БЛОКИРОВКИ) ---
 def scan_timeframe(interval_name, label_name, cooldown_sec):
     print(f"Scanner thread started for {interval_name} ({label_name})...")
     last_alerts = {}
@@ -429,13 +424,9 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                 if interval_name == "15m" and not SCALP_ENABLED:
                     break
 
-                # НОВАЯ ПРОВЕРКА: Если по этой монете уже есть активная сделка на любом таймфрейме — пропускаем
-                if any(t["symbol"] == symbol for t in active_trades.values()):
-                    continue
-
                 trade_key = f"{symbol}_{interval_name}"
                 
-                # Активные сделки обрабатываются быстрым потоком trade_monitor, здесь пропускаем их поиск
+                # Проверяем только этот конкретный таймфрейм, чтобы дать монете торговаться на разных ТФ
                 if trade_key in active_trades:
                     continue
                 
