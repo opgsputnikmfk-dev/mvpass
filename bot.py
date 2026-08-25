@@ -20,13 +20,31 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 active_chats = set()
-active_trades = {}  # Глобальный словарь активных сделок
 start_time = time.time()
 MEM_FILE = "bot_memory.json"
+ACTIVE_TRADES_FILE = "active_trades_memory.json" # <-- Файл для вечной памяти сделок
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
 SCALP_ENABLED = True  # Глобальный переключатель скальпинга
+
+# --- ПАМЯТЬ АКТИВНЫХ СДЕЛОК ---
+def load_active_trades():
+    if os.path.exists(ACTIVE_TRADES_FILE):
+        try:
+            with open(ACTIVE_TRADES_FILE, 'r') as f:
+                return json.load(f)
+        except: pass
+    return {}
+
+def save_active_trades():
+    try:
+        with open(ACTIVE_TRADES_FILE, 'w') as f:
+            json.dump(active_trades, f)
+    except Exception as e:
+        print(f"Ошибка сохранения памяти сделок: {e}")
+
+active_trades = load_active_trades() # <-- Теперь словарь загружается из файла при старте
 
 # --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) ---
 def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
@@ -347,6 +365,7 @@ def trade_monitor():
             for key, trade in list(active_trades.items()):
                 if time.time() - trade.get("timestamp", time.time()) > 43200:
                     del active_trades[key]
+                    save_active_trades() # <-- Сохраняем удаление
                     continue
 
                 symbol = trade["symbol"]
@@ -384,6 +403,7 @@ def trade_monitor():
                 if tp1_just_hit and not hit_result:
                     new_msg = trade["original_msg"].replace("🤖 **AI ALERT", f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]")
                     trade["original_msg"] = new_msg
+                    save_active_trades() # <-- Сохраняем взятие TP1
                     for chat_id, msg_id in trade["messages"]:
                         edit_msg(chat_id, msg_id, new_msg)
 
@@ -400,6 +420,7 @@ def trade_monitor():
                         edit_msg(chat_id, msg_id, updated_msg)
                         
                     del active_trades[key]
+                    save_active_trades() # <-- Сохраняем после удаления закрытой сделки
                     
         except Exception as e:
             print(f"Trade monitor error: {e}")
@@ -507,6 +528,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             "original_msg": msg_text,
                             "timestamp": time.time()
                         }
+                        save_active_trades() # <-- Сохраняем новую сделку в память
                         
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
