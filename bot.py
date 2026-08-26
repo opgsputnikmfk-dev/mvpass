@@ -10,8 +10,6 @@ from google import genai
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_IDS = {8299008675}
 SIGNAL_CHANNEL_ID = os.getenv("SIGNAL_CHANNEL_ID")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -22,7 +20,8 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 MEM_FILE = "bot_memory.json"
-ACTIVE_TRADES_FILE = "active_trades_memory.json" # <-- Файл для вечной памяти сделок
+ACTIVE_TRADES_FILE = "active_trades_memory.json" # Файл для вечной памяти сделок
+STATS_FILE = "bot_stats.json" # Файл для локальной статистики по монетам
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
@@ -44,76 +43,60 @@ def save_active_trades():
     except Exception as e:
         print(f"Ошибка сохранения памяти сделок: {e}")
 
-active_trades = load_active_trades() # <-- Теперь словарь загружается из файла при старте
+active_trades = load_active_trades()
 
-# --- ФУНКЦИИ БАЗЫ ДАННЫХ (SUPABASE) ---
-def save_trade_to_db(symbol, signal, timeframe_label, reason, entry, close_price, is_news_anomaly=False):
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ ОШИБКА SUPABASE: Не заданы URL или KEY в переменных среды Render!")
-        return
+# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО МОНЕТАМ ---
+def save_local_stat(symbol, reason):
+    stats = {}
+    if os.path.exists(STATS_FILE):
+        try:
+            with open(STATS_FILE, 'r') as f:
+                stats = json.load(f)
+        except: pass
     
-    url = f"{SUPABASE_URL}/rest/v1/trades"
-    trade_data = {
-        "symbol": symbol, 
-        "signal": signal, 
-        "timeframe": timeframe_label,
-        "reason": reason, 
-        "entry": float(entry), 
-        "close_price": float(close_price),
-        "news_anomaly": is_news_anomaly, 
-        "timestamp": float(time.time()),
-        "date_str": datetime.now().strftime('%Y-%m-%d %H:%M')
-    }
+    if symbol not in stats:
+        stats[symbol] = {"TP2": 0, "BE": 0, "SL": 0}
     
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
-    }
-    
-    try:
-        req = urllib.request.Request(url, data=json.dumps(trade_data).encode('utf-8'), headers=headers, method="POST")
-        with urllib.request.urlopen(req, context=context, timeout=10) as response:
-            print(f"✅ УСПЕХ ЗАПИСИ В DB: {symbol} | Сделка закрыта по [{reason}] | Вход: {entry} -> Выход: {close_price}")
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        print(f"❌ ОШИБКА HTTP ОТ SUPABASE ({e.code}): {error_body}")
-    except Exception as e:
-        print(f"❌ СБОЙ СОХРАНЕНИЯ СДЕЛКИ В SUPABASE: {e}")
-
-def generate_monthly_report():
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return "📭 Ошибка подключения к базе данных Supabase."
-    
-    url = f"{SUPABASE_URL}/rest/v1/trades?select=*"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-    
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=context, timeout=10) as r:
-            log = json.loads(r.read().decode())
-            
-        if not log: return "📭 База данных пуста. Закрытых сделок еще нет."
+    if reason in stats[symbol]:
+        stats[symbol][reason] += 1
         
-        report = "📊 **ОБЩАЯ СТАТИСТИКА ИИ (Supabase)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
-            trades = [t for t in log if t.get('timeframe') == tf]
-            total = len(trades)
-            if total == 0:
-                report += f"**{tf}:** Нет сделок\n"
-                continue
-            wins = sum(1 for t in trades if t.get('reason') == 'TP2')
-            be = sum(1 for t in trades if t.get('reason') == 'BE')
-            losses = sum(1 for t in trades if t.get('reason') == 'SL')
-            wr = (wins / (total - be) * 100) if (total - be) > 0 else 0
-            report += f"**{tf}:** Всего {total} | Тейки: {wins} | БУ: {be} | Стопы: {losses}\n🎯 Winrate: **{wr:.1f}%**\n\n"
-        return report
+    try:
+        with open(STATS_FILE, 'w') as f:
+            json.dump(stats, f)
     except Exception as e:
-        return f"Ошибка отчета Supabase: {e}"
+        print(f"Ошибка записи локальной статистики: {e}")
+
+def generate_local_report():
+    if not os.path.exists(STATS_FILE):
+        return "📭 Статистика пуста. Закрытых сделок еще нет."
+    
+    try:
+        with open(STATS_FILE, 'r') as f:
+            stats = json.load(f)
+    except:
+        return "❌ Ошибка чтения файла статистики."
+
+    if not stats: 
+        return "📭 Статистика пуста. Закрытых сделок еще нет."
+    
+    report = "📊 **СТАТИСТИКА ИИ (По монетам)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    
+    for symbol, data in stats.items():
+        tp2 = data.get('TP2', 0)
+        be = data.get('BE', 0)
+        sl = data.get('SL', 0)
+        total = tp2 + be + sl
+        
+        if total == 0:
+            continue
+            
+        sym_name = symbol.replace("USDT", "")
+        valid_trades = total - be
+        wr = (tp2 / valid_trades * 100) if valid_trades > 0 else 0
+        
+        report += f"🪙 **{sym_name}**: Всего {total} | Тейки: {tp2} | БУ: {be} | Стопы: {sl}\n🎯 Winrate: **{wr:.1f}%**\n\n"
+        
+    return report
 
 # --- ФУНКЦИИ ПОЛУЧЕНИЯ ДАННЫХ И СЕТИ ---
 def get_current_price(symbol):
@@ -348,7 +331,7 @@ def get_main_keyboard():
     scalp_status = "🟢 ВКЛ" if SCALP_ENABLED else "🔴 ВЫКЛ"
     return {
         "inline_keyboard": [
-            [{"text": "📊 СТАТИСТИКА И ПАМЯТЬ ИИ", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 ЛОКАЛЬНАЯ СТАТИСТИКА", "callback_data": "SHOW_STATS"}],
             [{"text": f"⏱ СКАЛЬПИНГ: {scalp_status}", "callback_data": "TOGGLE_SCALP"}],
             [{"text": "🪙 МОНИТОРИНГ", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 СТАТУС БОТА", "callback_data": "BOT_STATUS"}],
@@ -365,7 +348,7 @@ def trade_monitor():
             for key, trade in list(active_trades.items()):
                 if time.time() - trade.get("timestamp", time.time()) > 43200:
                     del active_trades[key]
-                    save_active_trades() # <-- Сохраняем удаление
+                    save_active_trades() 
                     continue
 
                 symbol = trade["symbol"]
@@ -403,13 +386,15 @@ def trade_monitor():
                 if tp1_just_hit and not hit_result:
                     new_msg = trade["original_msg"].replace("🤖 **AI ALERT", f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]")
                     trade["original_msg"] = new_msg
-                    save_active_trades() # <-- Сохраняем взятие TP1
+                    save_active_trades() 
                     for chat_id, msg_id in trade["messages"]:
                         edit_msg(chat_id, msg_id, new_msg)
 
                 if hit_result:
                     close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
-                    save_trade_to_db(trade["symbol"], trade["signal"], trade["label_name"], hit_result, trade["entry"], close_price)
+                    
+                    # Сохраняем в ЛОКАЛЬНУЮ статистику по монете
+                    save_local_stat(trade["symbol"], hit_result)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
                     
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
@@ -420,7 +405,7 @@ def trade_monitor():
                         edit_msg(chat_id, msg_id, updated_msg)
                         
                     del active_trades[key]
-                    save_active_trades() # <-- Сохраняем после удаления закрытой сделки
+                    save_active_trades() 
                     
         except Exception as e:
             print(f"Trade monitor error: {e}")
@@ -447,7 +432,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                 trade_key = f"{symbol}_{interval_name}"
                 
-                # Проверяем только этот конкретный таймфрейм, чтобы дать монете торговаться на разных ТФ
                 if trade_key in active_trades:
                     continue
                 
@@ -528,7 +512,7 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                             "original_msg": msg_text,
                             "timestamp": time.time()
                         }
-                        save_active_trades() # <-- Сохраняем новую сделку в память
+                        save_active_trades() 
                         
             time.sleep(SCAN_INTERVAL)
         except Exception as e:
@@ -562,7 +546,7 @@ def bot_engine():
                     active_chats.add(chat_id)
                     
                     if data == "SHOW_STATS":
-                        edit_msg(chat_id, message_id, generate_monthly_report(), get_main_keyboard())
+                        edit_msg(chat_id, message_id, generate_local_report(), get_main_keyboard())
                     elif data == "TOGGLE_SCALP":
                         global SCALP_ENABLED
                         SCALP_ENABLED = not SCALP_ENABLED
@@ -602,12 +586,12 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Real-Time High/Low Monitor & Scalp Toggle & Supabase)"
+def home(): return "AI Trading Bot Active (Local Coin Stats + Scalp Toggle)"
 
 if __name__ == "__main__":
     # Запуск фоновых потоков
     threading.Thread(target=bot_engine, daemon=True).start()
-    threading.Thread(target=trade_monitor, daemon=True).start()  # <-- Мгновенная проверка тейков по цене и High/Low
+    threading.Thread(target=trade_monitor, daemon=True).start()
     
     threading.Thread(target=scan_timeframe, args=("15m", "⏱ СКАЛЬПИНГ", 900), daemon=True).start()
     threading.Thread(target=scan_timeframe, args=("1h", "⚡️ ИНТРАДЕЙ", 3600), daemon=True).start()
