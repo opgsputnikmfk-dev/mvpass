@@ -20,12 +20,12 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "A
 active_chats = set()
 start_time = time.time()
 MEM_FILE = "bot_memory.json"
-ACTIVE_TRADES_FILE = "active_trades_memory.json" # Файл для вечной памяти сделок
-STATS_FILE = "bot_stats.json" # Файл для локальной статистики по монетам
+ACTIVE_TRADES_FILE = "active_trades_memory.json" 
+STATS_FILE = "bot_stats.json" 
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
-SCALP_ENABLED = True  # Глобальный переключатель скальпинга
+SCALP_ENABLED = True  
 
 # --- ПАМЯТЬ АКТИВНЫХ СДЕЛОК ---
 def load_active_trades():
@@ -45,8 +45,8 @@ def save_active_trades():
 
 active_trades = load_active_trades()
 
-# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО МОНЕТАМ ---
-def save_local_stat(symbol, reason):
+# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО ТАЙМФРЕЙМАМ (С АНАЛИТИКОЙ) ---
+def save_local_stat(tf_label, reason, pnl_pct):
     stats = {}
     if os.path.exists(STATS_FILE):
         try:
@@ -54,11 +54,23 @@ def save_local_stat(symbol, reason):
                 stats = json.load(f)
         except: pass
     
-    if symbol not in stats:
-        stats[symbol] = {"TP2": 0, "BE": 0, "SL": 0}
+    # Инициализация структуры таймфрейма, если его еще нет
+    if tf_label not in stats:
+        stats[tf_label] = {"TP2": 0, "BE": 0, "SL": 0, "total_pnl": 0.0, "streak": 0}
     
-    if reason in stats[symbol]:
-        stats[symbol][reason] += 1
+    # Увеличиваем счетчик причины (TP2/BE/SL)
+    if reason in stats[tf_label]:
+        stats[tf_label][reason] += 1
+        
+    # Плюсуем теоретический PnL
+    stats[tf_label]["total_pnl"] += pnl_pct
+    
+    # Обновляем стрик (подряд идущие плюсы или минусы)
+    current_streak = stats[tf_label].get("streak", 0)
+    if reason == "TP2":
+        stats[tf_label]["streak"] = current_streak + 1 if current_streak > 0 else 1
+    elif reason == "SL":
+        stats[tf_label]["streak"] = current_streak - 1 if current_streak < 0 else -1
         
     try:
         with open(STATS_FILE, 'w') as f:
@@ -79,22 +91,43 @@ def generate_local_report():
     if not stats: 
         return "📭 Статистика пуста. Закрытых сделок еще нет."
     
-    report = "📊 **СТАТИСТИКА ИИ (По монетам)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    report = "📊 **АНАЛИТИКА ТАЙМФРЕЙМОВ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    total_pnl_all = 0.0
     
-    for symbol, data in stats.items():
+    for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
+        if tf not in stats:
+            continue
+            
+        data = stats[tf]
         tp2 = data.get('TP2', 0)
         be = data.get('BE', 0)
         sl = data.get('SL', 0)
-        total = tp2 + be + sl
+        pnl = data.get('total_pnl', 0.0)
+        streak = data.get('streak', 0)
         
-        if total == 0:
-            continue
+        total = tp2 + be + sl
+        if total == 0: continue
             
-        sym_name = symbol.replace("USDT", "")
+        total_pnl_all += pnl
         valid_trades = total - be
         wr = (tp2 / valid_trades * 100) if valid_trades > 0 else 0
         
-        report += f"🪙 **{sym_name}**: Всего {total} | Тейки: {tp2} | БУ: {be} | Стопы: {sl}\n🎯 Winrate: **{wr:.1f}%**\n\n"
+        # Форматирование стрика
+        if streak > 0:
+            streak_str = f"🔥 {streak} в плюс"
+        elif streak < 0:
+            streak_str = f"🩸 {abs(streak)} в минус"
+        else:
+            streak_str = "➖"
+        
+        report += f"**{tf}**\n"
+        report += f"📈 Сделок: {total} (Тейки: {tp2} | БУ: {be} | Стопы: {sl})\n"
+        report += f"🎯 Winrate: **{wr:.1f}%**\n"
+        report += f"💰 Теоретический PnL: **{pnl:+.2f}%**\n"
+        report += f"⚡️ Текущий стрик: {streak_str}\n\n"
+        
+    report += f"➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    report += f"💵 **ОБЩИЙ ИТОГ (Без плеча): {total_pnl_all:+.2f}%**"
         
     return report
 
@@ -331,7 +364,7 @@ def get_main_keyboard():
     scalp_status = "🟢 ВКЛ" if SCALP_ENABLED else "🔴 ВЫКЛ"
     return {
         "inline_keyboard": [
-            [{"text": "📊 ЛОКАЛЬНАЯ СТАТИСТИКА", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 АНАЛИТИКА ТАЙМФРЕЙМОВ", "callback_data": "SHOW_STATS"}],
             [{"text": f"⏱ СКАЛЬПИНГ: {scalp_status}", "callback_data": "TOGGLE_SCALP"}],
             [{"text": "🪙 МОНИТОРИНГ", "callback_data": "SHOW_ASSETS"},
              {"text": "🟢 СТАТУС БОТА", "callback_data": "BOT_STATUS"}],
@@ -393,13 +426,22 @@ def trade_monitor():
                 if hit_result:
                     close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
                     
-                    # Сохраняем в ЛОКАЛЬНУЮ статистику по монете
-                    save_local_stat(trade["symbol"], hit_result)
+                    # --- РАСЧЕТ ТЕОРЕТИЧЕСКОГО PNL ДЛЯ АНАЛИТИКИ ---
+                    pnl_percent = 0.0
+                    if trade["signal"] == "LONG":
+                        pnl_percent = ((close_price - trade["entry"]) / trade["entry"]) * 100
+                    else:
+                        pnl_percent = ((trade["entry"] - close_price) / trade["entry"]) * 100
+                        
+                    # Сохраняем статистику по ТАЙМФРЕЙМУ
+                    save_local_stat(trade["label_name"], hit_result, pnl_percent)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
                     
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
                     updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
-                    updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{close_price:.4f}`"
+                    
+                    # Добавляем в сообщение закрытия профит
+                    updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{close_price:.4f}`\nДвижение: **{pnl_percent:+.2f}%**"
                     
                     for chat_id, msg_id in trade["messages"]:
                         edit_msg(chat_id, msg_id, updated_msg)
@@ -586,7 +628,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Local Coin Stats + Scalp Toggle)"
+def home(): return "AI Trading Bot Active (TF Analytics + Local Memory)"
 
 if __name__ == "__main__":
     # Запуск фоновых потоков
