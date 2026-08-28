@@ -22,10 +22,46 @@ start_time = time.time()
 MEM_FILE = "bot_memory.json"
 ACTIVE_TRADES_FILE = "active_trades_memory.json" 
 STATS_FILE = "bot_stats.json" 
+COOLDOWNS_FILE = "cooldowns_memory.json" # Файл для черного списка монет после стопа
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
+
+# --- ГЛОБАЛЬНЫЕ ПЕРЕКЛЮЧАТЕЛИ ---
+SIGNALS_ENABLED = True  # Глобальный рубильник поиска сигналов (Кнопка Паузы)
 SCALP_ENABLED = True  
+
+# --- СИСТЕМА КУЛДАУНОВ (ЗАЩИТА ОТ ЛУЗСТРИКА) ---
+def load_cooldowns():
+    if os.path.exists(COOLDOWNS_FILE):
+        try:
+            with open(COOLDOWNS_FILE, 'r') as f:
+                return json.load(f)
+        except: pass
+    return {}
+
+def save_cooldowns():
+    try:
+        with open(COOLDOWNS_FILE, 'w') as f:
+            json.dump(cooldowns, f)
+    except: pass
+
+cooldowns = load_cooldowns()
+
+def set_cooldown(symbol, interval, duration_sec):
+    key = f"{symbol}_{interval}"
+    cooldowns[key] = time.time() + duration_sec
+    save_cooldowns()
+
+def is_on_cooldown(symbol, interval):
+    key = f"{symbol}_{interval}"
+    if key in cooldowns:
+        if time.time() < cooldowns[key]:
+            return True
+        else:
+            del cooldowns[key]
+            save_cooldowns()
+    return False
 
 # --- ПАМЯТЬ АКТИВНЫХ СДЕЛОК ---
 def load_active_trades():
@@ -54,18 +90,14 @@ def save_local_stat(tf_label, reason, pnl_pct):
                 stats = json.load(f)
         except: pass
     
-    # Инициализация структуры таймфрейма, если его еще нет
     if tf_label not in stats:
         stats[tf_label] = {"TP2": 0, "BE": 0, "SL": 0, "total_pnl": 0.0, "streak": 0}
     
-    # Увеличиваем счетчик причины (TP2/BE/SL)
     if reason in stats[tf_label]:
         stats[tf_label][reason] += 1
         
-    # Плюсуем теоретический PnL
     stats[tf_label]["total_pnl"] += pnl_pct
     
-    # Обновляем стрик (подряд идущие плюсы или минусы)
     current_streak = stats[tf_label].get("streak", 0)
     if reason == "TP2":
         stats[tf_label]["streak"] = current_streak + 1 if current_streak > 0 else 1
@@ -112,7 +144,6 @@ def generate_local_report():
         valid_trades = total - be
         wr = (tp2 / valid_trades * 100) if valid_trades > 0 else 0
         
-        # Форматирование стрика
         if streak > 0:
             streak_str = f"🔥 {streak} в плюс"
         elif streak < 0:
@@ -127,7 +158,8 @@ def generate_local_report():
         report += f"⚡️ Текущий стрик: {streak_str}\n\n"
         
     report += f"➖➖➖➖➖➖➖➖➖➖➖➖\n"
-    report += f"💵 **ОБЩИЙ ИТОГ (Без плеча): {total_pnl_all:+.2f}%**"
+    report += f"💵 **ОБЩИЙ ИТОГ (Без плеча): {total_pnl_all:+.2f}%**\n"
+    report += f"🛡 **Открыто позиций:** {len(active_trades)}"
         
     return report
 
@@ -346,6 +378,13 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
 
     if signal:
+        # Строгая синхронизация для 1h (Защита от ловли ножей)
+        if interval == "1h":
+            if signal == "LONG" and curr_p < ema200:
+                return None, 0, "", "🛡 Локальный тренд 1h против макро-тренда"
+            if signal == "SHORT" and curr_p > ema200:
+                return None, 0, "", "🛡 Локальный тренд 1h против макро-тренда"
+
         if not is_4h:
             if not check_order_book(symbol, signal):
                 return None, 0, "", "🛡 Стакан против сделки (Дисбаланс)"
@@ -362,8 +401,10 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
 
 def get_main_keyboard():
     scalp_status = "🟢 ВКЛ" if SCALP_ENABLED else "🔴 ВЫКЛ"
+    signals_status = "🟢 АКТИВЕН" if SIGNALS_ENABLED else "🔴 ПАУЗА"
     return {
         "inline_keyboard": [
+            [{"text": f"📡 ПОИСК СИГНАЛОВ: {signals_status}", "callback_data": "TOGGLE_SIGNALS"}],
             [{"text": "📊 АНАЛИТИКА ТАЙМФРЕЙМОВ", "callback_data": "SHOW_STATS"}],
             [{"text": f"⏱ СКАЛЬПИНГ: {scalp_status}", "callback_data": "TOGGLE_SCALP"}],
             [{"text": "🪙 МОНИТОРИНГ", "callback_data": "SHOW_ASSETS"},
@@ -426,21 +467,21 @@ def trade_monitor():
                 if hit_result:
                     close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
                     
-                    # --- РАСЧЕТ ТЕОРЕТИЧЕСКОГО PNL ДЛЯ АНАЛИТИКИ ---
+                    # Отправляем монету в Кулдаун на 6 часов при получении СТОПА
+                    if hit_result == "SL":
+                        set_cooldown(trade["symbol"], trade["interval_name"], 6 * 3600)
+                    
                     pnl_percent = 0.0
                     if trade["signal"] == "LONG":
                         pnl_percent = ((close_price - trade["entry"]) / trade["entry"]) * 100
                     else:
                         pnl_percent = ((trade["entry"] - close_price) / trade["entry"]) * 100
                         
-                    # Сохраняем статистику по ТАЙМФРЕЙМУ
                     save_local_stat(trade["label_name"], hit_result, pnl_percent)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
                     
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
                     updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
-                    
-                    # Добавляем в сообщение закрытия профит
                     updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{close_price:.4f}`\nДвижение: **{pnl_percent:+.2f}%**"
                     
                     for chat_id, msg_id in trade["messages"]:
@@ -454,13 +495,19 @@ def trade_monitor():
         
         time.sleep(2)
 
-# --- ПОТОК СКАНИРОВАНИЯ РЫНКА (СНЯТЫ БЛОКИРОВКИ) ---
+# --- ПОТОК СКАНИРОВАНИЯ РЫНКА ---
 def scan_timeframe(interval_name, label_name, cooldown_sec):
     print(f"Scanner thread started for {interval_name} ({label_name})...")
     last_alerts = {}
     
     while True:
         try:
+            # Рубильник паузы сигналов
+            global SIGNALS_ENABLED
+            if not SIGNALS_ENABLED:
+                time.sleep(10)
+                continue
+
             if interval_name == "15m" and not SCALP_ENABLED:
                 time.sleep(10)
                 continue
@@ -475,6 +522,10 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                 trade_key = f"{symbol}_{interval_name}"
                 
                 if trade_key in active_trades:
+                    continue
+                    
+                # Проверка на индивидуальный Кулдаун после СТОП-ЛОССА
+                if is_on_cooldown(symbol, interval_name):
                     continue
                 
                 if now - last_alerts.get(symbol, 0) < cooldown_sec: continue
@@ -587,7 +638,12 @@ def bot_engine():
                     if int(chat_id) not in ADMIN_CHAT_IDS: continue 
                     active_chats.add(chat_id)
                     
-                    if data == "SHOW_STATS":
+                    if data == "TOGGLE_SIGNALS":
+                        global SIGNALS_ENABLED
+                        SIGNALS_ENABLED = not SIGNALS_ENABLED
+                        status_text = "🟢 Поиск сигналов АКТИВИРОВАН!" if SIGNALS_ENABLED else "🔴 Поиск сигналов ОСТАНОВЛЕН (Пауза)."
+                        edit_msg(chat_id, message_id, f"{status_text}\n\nВыбери действие 👇", get_main_keyboard())
+                    elif data == "SHOW_STATS":
                         edit_msg(chat_id, message_id, generate_local_report(), get_main_keyboard())
                     elif data == "TOGGLE_SCALP":
                         global SCALP_ENABLED
@@ -601,15 +657,17 @@ def bot_engine():
                         uptime_sec = int(time.time() - start_time)
                         h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
                         scalp_state = "ВКЛ" if SCALP_ENABLED else "ВЫКЛ"
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nСкальпинг (15m): [{scalp_state}]\nИнтрадей/Свинг (1H/4H): Активны.\nМониторинг цен (Ticker + High/Low): Каждые 2 сек.", get_main_keyboard())
+                        sig_state = "АКТИВЕН" if SIGNALS_ENABLED else "ПАУЗА"
+                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nПоиск сигналов: [{sig_state}]\nСкальпинг (15m): [{scalp_state}]\nОткрыто позиций: {len(active_trades)}\nМониторинг цен: Каждые 2 сек.", get_main_keyboard())
                     elif data == "SHOW_STRATEGY":
                         edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Order Book + Gemini AI.", get_main_keyboard())
                     elif data == "SHOW_HELP":
                         help_text = (
                             "ℹ️ **СПРАВКА ПО УПРАВЛЕНИЮ**\n"
                             "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
+                            "• **ПОИСК СИГНАЛОВ:** Полное отключение новых сделок (например, на выходные).\n"
                             "• Мгновенная фиксация тейков по экстремумам свечей.\n"
-                            "• Переключатель скальпинга прямо в меню."
+                            "• Кулдаун 6 часов на монету после стоп-лосса."
                         )
                         edit_msg(chat_id, message_id, help_text, get_main_keyboard())
                     elif "message" in u and "text" in u["message"]:
@@ -628,7 +686,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (TF Analytics + Local Memory)"
+def home(): return "AI Trading Bot Active (Uncapped Positions + Trend Sync)"
 
 if __name__ == "__main__":
     # Запуск фоновых потоков
