@@ -19,17 +19,36 @@ app = Flask(__name__)
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"]
 active_chats = set()
 start_time = time.time()
+
 MEM_FILE = "bot_memory.json"
 ACTIVE_TRADES_FILE = "active_trades_memory.json" 
 STATS_FILE = "bot_stats.json" 
-COOLDOWNS_FILE = "cooldowns_memory.json" # Файл для черного списка монет после стопа
+COOLDOWNS_FILE = "cooldowns_memory.json"
+LEDGER_FILE = "bot_ledger.json" # Новый файл для истории сделок
 
 SCAN_INTERVAL = 60
 NEIGHBORS = 5
 
-# --- ГЛОБАЛЬНЫЕ ПЕРЕКЛЮЧАТЕЛИ ---
+# --- ГЛОБАЛЬНЫЕ ПЕРЕКЛЮЧАТЕЛИ И ЛИМИТЫ ---
 SIGNALS_ENABLED = True  # Глобальный рубильник поиска сигналов (Кнопка Паузы)
 SCALP_ENABLED = True  
+MAX_TRADES_PER_TF = 3  # Максимум 3 сделки НА КАЖДЫЙ ТАЙМФРЕЙМ отдельно
+
+# --- LEDGER (ИСТОРИЯ СДЕЛОК) ---
+def get_ledger():
+    if os.path.exists(LEDGER_FILE):
+        try:
+            with open(LEDGER_FILE, 'r') as f: return json.load(f)
+        except: pass
+    return []
+
+def add_to_ledger(trade_entry):
+    ledger = get_ledger()
+    ledger.insert(0, trade_entry)
+    ledger = ledger[:10]  # Храним только 10 последних сделок
+    try:
+        with open(LEDGER_FILE, 'w') as f: json.dump(ledger, f)
+    except: pass
 
 # --- СИСТЕМА КУЛДАУНОВ (ЗАЩИТА ОТ ЛУЗСТРИКА) ---
 def load_cooldowns():
@@ -81,7 +100,7 @@ def save_active_trades():
 
 active_trades = load_active_trades()
 
-# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО ТАЙМФРЕЙМАМ (С АНАЛИТИКОЙ) ---
+# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО ТАЙМФРЕЙМАМ ---
 def save_local_stat(tf_label, reason, pnl_pct):
     stats = {}
     if os.path.exists(STATS_FILE):
@@ -123,7 +142,7 @@ def generate_local_report():
     if not stats: 
         return "📭 Статистика пуста. Закрытых сделок еще нет."
     
-    report = "📊 **АНАЛИТИКА ТАЙМФРЕЙМОВ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    report = "📊 **ОБЩИЙ PNL И АНАЛИТИКА**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
     total_pnl_all = 0.0
     
     for tf in ["⏱ СКАЛЬПИНГ", "⚡️ ИНТРАДЕЙ", "🌊 СВИНГ"]:
@@ -158,8 +177,7 @@ def generate_local_report():
         report += f"⚡️ Текущий стрик: {streak_str}\n\n"
         
     report += f"➖➖➖➖➖➖➖➖➖➖➖➖\n"
-    report += f"💵 **ОБЩИЙ ИТОГ (Без плеча): {total_pnl_all:+.2f}%**\n"
-    report += f"🛡 **Открыто позиций:** {len(active_trades)}"
+    report += f"💵 **ОБЩИЙ ИТОГ (Без плеча): {total_pnl_all:+.2f}%**"
         
     return report
 
@@ -378,7 +396,6 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
         avg_move = sum(m for d, o, m in top_neighbors if o == -1) / downs
 
     if signal:
-        # Строгая синхронизация для 1h (Защита от ловли ножей)
         if interval == "1h":
             if signal == "LONG" and curr_p < ema200:
                 return None, 0, "", "🛡 Локальный тренд 1h против макро-тренда"
@@ -399,18 +416,18 @@ def predict_knn(candles, symbol, interval, current_idx, atr, macro_trend):
         
     return None, 0, "", ""
 
+# --- НОВОЕ ПРОДВИНУТОЕ МЕНЮ ---
 def get_main_keyboard():
     scalp_status = "🟢 ВКЛ" if SCALP_ENABLED else "🔴 ВЫКЛ"
     signals_status = "🟢 АКТИВЕН" if SIGNALS_ENABLED else "🔴 ПАУЗА"
     return {
         "inline_keyboard": [
-            [{"text": f"📡 ПОИСК СИГНАЛОВ: {signals_status}", "callback_data": "TOGGLE_SIGNALS"}],
-            [{"text": "📊 АНАЛИТИКА ТАЙМФРЕЙМОВ", "callback_data": "SHOW_STATS"}],
-            [{"text": f"⏱ СКАЛЬПИНГ: {scalp_status}", "callback_data": "TOGGLE_SCALP"}],
-            [{"text": "🪙 МОНИТОРИНГ", "callback_data": "SHOW_ASSETS"},
-             {"text": "🟢 СТАТУС БОТА", "callback_data": "BOT_STATUS"}],
-            [{"text": "🧠 СТРАТЕГИЯ", "callback_data": "SHOW_STRATEGY"},
-             {"text": "ℹ️ СПРАВКА", "callback_data": "SHOW_HELP"}]
+            [{"text": "📈 ОТКРЫТЫЕ СДЕЛКИ (Live)", "callback_data": "SHOW_LIVE_TRADES"}],
+            [{"text": "📊 ОБЩИЙ PNL И АНАЛИТИКА", "callback_data": "SHOW_STATS"}],
+            [{"text": "📜 ИСТОРИЯ И КУЛДАУНЫ", "callback_data": "SHOW_HISTORY"}],
+            [{"text": "🧠 СТАТУС ОБУЧЕНИЯ ИИ", "callback_data": "SHOW_AI_MEMORY"}],
+            [{"text": f"📡 СИГНАЛЫ: {signals_status}", "callback_data": "TOGGLE_SIGNALS"},
+             {"text": f"⏱ СКАЛЬП: {scalp_status}", "callback_data": "TOGGLE_SCALP"}]
         ]
     }
 
@@ -467,7 +484,6 @@ def trade_monitor():
                 if hit_result:
                     close_price = trade["tp2"] if hit_result == "TP2" else (trade["entry"] if hit_result == "BE" else trade["sl"])
                     
-                    # Отправляем монету в Кулдаун на 6 часов при получении СТОПА
                     if hit_result == "SL":
                         set_cooldown(trade["symbol"], trade["interval_name"], 6 * 3600)
                     
@@ -479,6 +495,11 @@ def trade_monitor():
                         
                     save_local_stat(trade["label_name"], hit_result, pnl_percent)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
+                    
+                    # Запись в Ledger
+                    icon = "✅" if hit_result == "TP2" else "⚖️" if hit_result == "BE" else "❌"
+                    ledger_entry = f"{icon} {trade['symbol']} ({trade['interval_name']}) | {hit_result} | {pnl_percent:+.2f}%"
+                    add_to_ledger(ledger_entry)
                     
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
                     updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
@@ -502,7 +523,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
     
     while True:
         try:
-            # Рубильник паузы сигналов
             global SIGNALS_ENABLED
             if not SIGNALS_ENABLED:
                 time.sleep(10)
@@ -512,10 +532,18 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                 time.sleep(10)
                 continue
 
+            open_for_this_tf = sum(1 for t in active_trades.values() if t.get("interval_name") == interval_name)
+            if open_for_this_tf >= MAX_TRADES_PER_TF:
+                time.sleep(10)
+                continue
+
             macro_trend = get_macro_trend()
             now = time.time()
             
             for symbol in SYMBOLS:
+                if sum(1 for t in active_trades.values() if t.get("interval_name") == interval_name) >= MAX_TRADES_PER_TF:
+                    break
+                    
                 if interval_name == "15m" and not SCALP_ENABLED:
                     break
 
@@ -524,7 +552,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                 if trade_key in active_trades:
                     continue
                     
-                # Проверка на индивидуальный Кулдаун после СТОП-ЛОССА
                 if is_on_cooldown(symbol, interval_name):
                     continue
                 
@@ -643,35 +670,72 @@ def bot_engine():
                         SIGNALS_ENABLED = not SIGNALS_ENABLED
                         status_text = "🟢 Поиск сигналов АКТИВИРОВАН!" if SIGNALS_ENABLED else "🔴 Поиск сигналов ОСТАНОВЛЕН (Пауза)."
                         edit_msg(chat_id, message_id, f"{status_text}\n\nВыбери действие 👇", get_main_keyboard())
+                        
+                    elif data == "SHOW_LIVE_TRADES":
+                        if not active_trades:
+                            msg = "📭 **ОТКРЫТЫХ СДЕЛОК НЕТ**\nБот ждет подходящих рыночных условий."
+                        else:
+                            msg = "📈 **ОТКРЫТЫЕ СДЕЛКИ (Live PnL)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+                            for key, t in active_trades.items():
+                                cp = get_current_price(t['symbol'])
+                                pnl = 0.0
+                                if cp:
+                                    if t['signal'] == 'LONG':
+                                        pnl = ((cp - t['entry']) / t['entry']) * 100
+                                    else:
+                                        pnl = ((t['entry'] - cp) / t['entry']) * 100
+                                
+                                emo = "🟢" if t['signal'] == "LONG" else "🔴"
+                                msg += f"**{t['label_name']} | {t['symbol']}**\n"
+                                msg += f"Направление: {emo} {t['signal']}\n"
+                                msg += f"Вход: `{t['entry']:.4f}` | Текущая: `{cp if cp else 'N/A'}`\n"
+                                msg += f"Live PnL: **{pnl:+.2f}%**\n\n"
+                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        
+                    elif data == "SHOW_HISTORY":
+                        ledger = get_ledger()
+                        hist_txt = "\n".join([f"{i+1}. {x}" for i, x in enumerate(ledger)]) if ledger else "Пока нет закрытых сделок."
+                        
+                        cd_txt = ""
+                        now = time.time()
+                        for k, v in list(cooldowns.items()):
+                            if v > now:
+                                rem_m = int((v - now) // 60)
+                                h, m = rem_m // 60, rem_m % 60
+                                cd_txt += f"🩸 `{k}` — Остывает: {h}ч {m}м\n"
+                        if not cd_txt: cd_txt = "Все монеты торгуются свободно."
+                        
+                        msg = f"📜 **ИСТОРИЯ (Последние 10 сделок)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n{hist_txt}\n\n🛑 **РАДАР КУЛДАУНОВ**\n➖➖➖➖➖➖➖➖➖➖➖➖\n{cd_txt}"
+                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        
+                    elif data == "SHOW_AI_MEMORY":
+                        mem = {}
+                        if os.path.exists(MEM_FILE):
+                            try:
+                                with open(MEM_FILE, 'r') as f: mem = json.load(f)
+                            except: pass
+                        
+                        mem_txt = ""
+                        for k, v in mem.items():
+                            adx = v.get("min_adx", 10)
+                            status = "Базовый" if adx <= 10 else "Повышенный" if adx <= 15 else "Жесткий"
+                            mem_txt += f"🔹 `{k}`: ADX **{adx}** ({status})\n"
+                        if not mem_txt: mem_txt = "Бот работает на базовых настройках (ADX: 10)."
+                        
+                        msg = f"🧠 **СТАТУС ОБУЧЕНИЯ ИИ (Адаптация)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n{mem_txt}\n\n💡 *Бот повышает требования к тренду (ADX) после убытков, чтобы защитить капитал.*"
+                        edit_msg(chat_id, message_id, msg, get_main_keyboard())
+                        
                     elif data == "SHOW_STATS":
                         edit_msg(chat_id, message_id, generate_local_report(), get_main_keyboard())
+                        
                     elif data == "TOGGLE_SCALP":
                         global SCALP_ENABLED
                         SCALP_ENABLED = not SCALP_ENABLED
                         status_text = "🟢 Скальпинг (15m) активирован!" if SCALP_ENABLED else "🔴 Скальпинг (15m) отключен."
                         edit_msg(chat_id, message_id, f"{status_text}\n\nВыбери действие 👇", get_main_keyboard())
-                    elif data == "SHOW_ASSETS":
-                        assets_list = "\n".join([f"🔹 `{s.replace('USDT', '')}`" for s in SYMBOLS])
-                        edit_msg(chat_id, message_id, f"🪙 **МОНИТОРИНГ (10)**\n\n{assets_list}", get_main_keyboard())
-                    elif data == "BOT_STATUS":
-                        uptime_sec = int(time.time() - start_time)
-                        h, m = uptime_sec // 3600, (uptime_sec % 3600) // 60
-                        scalp_state = "ВКЛ" if SCALP_ENABLED else "ВЫКЛ"
-                        sig_state = "АКТИВЕН" if SIGNALS_ENABLED else "ПАУЗА"
-                        edit_msg(chat_id, message_id, f"🟢 **СТАТУС**\nАптайм: {h}ч {m}м\nПоиск сигналов: [{sig_state}]\nСкальпинг (15m): [{scalp_state}]\nОткрыто позиций: {len(active_trades)}\nМониторинг цен: Каждые 2 сек.", get_main_keyboard())
-                    elif data == "SHOW_STRATEGY":
-                        edit_msg(chat_id, message_id, "🧠 **СТРАТЕГИЯ:** k-NN + 3 Сигмы + Volume Climax + Order Book + Gemini AI.", get_main_keyboard())
-                    elif data == "SHOW_HELP":
-                        help_text = (
-                            "ℹ️ **СПРАВКА ПО УПРАВЛЕНИЮ**\n"
-                            "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-                            "• **ПОИСК СИГНАЛОВ:** Полное отключение новых сделок (например, на выходные).\n"
-                            "• Мгновенная фиксация тейков по экстремумам свечей.\n"
-                            "• Кулдаун 6 часов на монету после стоп-лосса."
-                        )
-                        edit_msg(chat_id, message_id, help_text, get_main_keyboard())
+                        
                     elif "message" in u and "text" in u["message"]:
-                        send_msg(chat_id, "🚀 **ТЕРМИНАЛ АКТИВЕН**\nВыбери действие 👇", get_main_keyboard())
+                        send_msg(chat_id, "🚀 **ГЛАВНЫЙ ТЕРМИНАЛ**\nВыбери нужный раздел аналитики 👇", get_main_keyboard())
                         
                     if callback_query_id:
                         try:
@@ -686,10 +750,9 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Uncapped Positions + Trend Sync)"
+def home(): return "AI Trading Bot Active (Professional Dashboard Mode)"
 
 if __name__ == "__main__":
-    # Запуск фоновых потоков
     threading.Thread(target=bot_engine, daemon=True).start()
     threading.Thread(target=trade_monitor, daemon=True).start()
     
