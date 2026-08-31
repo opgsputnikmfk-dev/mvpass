@@ -4,14 +4,11 @@ import math
 from datetime import datetime
 import pandas as pd
 import numpy as np
-from google import genai
 
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_IDS = {8299008675}
 SIGNAL_CHANNEL_ID = os.getenv("SIGNAL_CHANNEL_ID")
-
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 context = ssl._create_unverified_context()
 app = Flask(__name__)
@@ -25,29 +22,74 @@ ACTIVE_TRADES_FILE = "active_trades_memory.json"
 STATS_FILE = "bot_stats.json"
 COOLDOWNS_FILE = "cooldowns_memory.json"
 LEDGER_FILE = "bot_ledger.json"
+REJECT_STATS_FILE = "reject_stats.json"  # НОВОЕ: файл для статистики отказов
 
 SCAN_INTERVAL = 60
 
-# --- ПАРАМЕТРЫ KNN (ИЗМЕНЕНО: было NEIGHBORS=5, HISTORY_LIMIT=300) ---
-NEIGHBORS = 15                    # больше соседей = устойчивее статистика, меньше шума
-HISTORY_LIMIT = 700               # больше истории для поиска исторических аналогов
-MIN_NEIGHBOR_VOTES_RATIO = 0.4    # минимальная доля голосов "за" направление
-FEATURE_WEIGHTS = [1.0, 1.0, 0.3, 0.6, 0.4]  # тело/ATR, диапазон/ATR, объём, откл.от EMA200, RSI
+# --- ПАРАМЕТРЫ KNN ---
+NEIGHBORS = 15
+HISTORY_LIMIT = 700
+MIN_NEIGHBOR_VOTES_RATIO = 0.4
+FEATURE_WEIGHTS = [1.0, 1.0, 0.3, 0.6, 0.4]
 
 # --- ГЛОБАЛЬНЫЕ ПЕРЕКЛЮЧАТЕЛИ И ЛИМИТЫ ---
 SIGNALS_ENABLED = True
 SCALP_ENABLED = True
 MAX_TRADES_PER_TF = 3
-MAX_SAME_DIRECTION_PER_TF = 2     # НОВОЕ: лимит на однонаправленные (коррелированные) сделки
+MAX_SAME_DIRECTION_PER_TF = 2
 
-# --- РИСК-МЕНЕДЖМЕНТ (ИЗМЕНЕНО: было SL=2.0*ATR, TP1=1.0*ATR — R:R был против нас) ---
+# --- РИСК-МЕНЕДЖМЕНТ ---
 SL_ATR_MULT = 1.5
-TP1_ATR_MULT = 1.5                # теперь минимум 1:1 к стопу до перевода в безубыток
-FEE_SLIPPAGE_PCT = 0.12           # НОВОЕ: комиссия+проскальзывание за круг, вычитается из PnL
+TP1_ATR_MULT = 1.5
+FEE_SLIPPAGE_PCT = 0.12
 
-# --- ПОТОКОБЕЗОПАСНОСТЬ (НОВОЕ) ---
+# --- ПОТОКОБЕЗОПАСНОСТЬ ---
 active_trades_lock = threading.Lock()
 cooldowns_lock = threading.Lock()
+rejects_lock = threading.Lock()  # НОВОЕ: защита для счетчиков отказов
+
+# --- СТАТИСТИКА ОТКАЗОВ (ТЕЛЕМЕТРИЯ) ---
+reject_stats = {}
+
+def load_rejects():
+    global reject_stats
+    if os.path.exists(REJECT_STATS_FILE):
+        try:
+            with open(REJECT_STATS_FILE, 'r') as f:
+                reject_stats = json.load(f)
+        except: pass
+
+load_rejects()
+
+def log_reject(interval, reason):
+    if not reason: return
+    # Убираем эмодзи для более чистой группировки
+    clean_reason = reason.replace("🛡 ", "").strip()
+    
+    with rejects_lock:
+        if interval not in reject_stats:
+            reject_stats[interval] = {}
+        reject_stats[interval][clean_reason] = reject_stats[interval].get(clean_reason, 0) + 1
+        try:
+            with open(REJECT_STATS_FILE, 'w') as f:
+                json.dump(reject_stats, f)
+        except: pass
+
+def generate_reject_report():
+    if not reject_stats:
+        return "📭 Статистика отказов пока пуста. Бот только начал сканирование."
+    
+    report = "🚫 **СТАТИСТИКА ОТКАЗОВ (Фильтры)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
+    for tf in ["15m", "1h", "4h"]:
+        if tf in reject_stats and reject_stats[tf]:
+            report += f"**Таймфрейм: {tf}**\n"
+            sorted_reasons = sorted(reject_stats[tf].items(), key=lambda x: x[1], reverse=True)
+            for reason, count in sorted_reasons:
+                report += f"• {reason}: `{count}`\n"
+            report += "\n"
+    
+    report += "💡 *Помогает понять, какой фильтр срезает больше всего сделок.*"
+    return report.strip()
 
 # --- LEDGER (ИСТОРИЯ СДЕЛОК) ---
 def get_ledger():
@@ -117,7 +159,7 @@ def save_active_trades():
 
 active_trades = load_active_trades()
 
-# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО ТАЙМФРЕЙМАМ (ИЗМЕНЕНО: добавлена категория TIMEOUT) ---
+# --- ЛОКАЛЬНАЯ СТАТИСТИКА ПО ТАЙМФРЕЙМАМ ---
 def save_local_stat(tf_label, reason, pnl_pct):
     stats = {}
     if os.path.exists(STATS_FILE):
@@ -129,7 +171,7 @@ def save_local_stat(tf_label, reason, pnl_pct):
     if tf_label not in stats:
         stats[tf_label] = {"TP2": 0, "BE": 0, "SL": 0, "TIMEOUT": 0, "total_pnl": 0.0, "streak": 0}
     if "TIMEOUT" not in stats[tf_label]:
-        stats[tf_label]["TIMEOUT"] = 0  # для обратной совместимости со старым файлом статистики
+        stats[tf_label]["TIMEOUT"] = 0
 
     if reason in stats[tf_label]:
         stats[tf_label][reason] += 1
@@ -180,8 +222,6 @@ def generate_local_report():
         if total == 0: continue
 
         total_pnl_all += pnl
-        # ИЗМЕНЕНО: winrate теперь считается только по TP2/SL — БУ и таймауты не тянут
-        # результат в "среднее", т.к. это не победа и не поражение по методу входа.
         valid_trades = tp2 + sl
         wr = (tp2 / valid_trades * 100) if valid_trades > 0 else 0
 
@@ -195,7 +235,7 @@ def generate_local_report():
         report += f"**{tf}**\n"
         report += f"📈 Сделок: {total} (Тейки: {tp2} | БУ: {be} | Стопы: {sl} | Таймауты: {timeout})\n"
         report += f"🎯 Winrate (TP2 vs SL): **{wr:.1f}%**\n"
-        report += f"💰 Реальный PnL (с учетом комиссии): **{pnl:+.2f}%**\n"
+        report += f"💰 Реальный PnL: **{pnl:+.2f}%**\n"
         report += f"⚡️ Текущий стрик: {streak_str}\n\n"
 
     report += f"➖➖➖➖➖➖➖➖➖➖➖➖\n"
@@ -256,9 +296,7 @@ def broadcast(text):
         if mid: msgs.append((chat_id, mid))
     return msgs
 
-# --- ИНТЕЛЛЕКТУАЛЬНЫЕ ФУНКЦИИ И ФИЛЬТРЫ ---
-# ИЗМЕНЕНО: базовый порог ADX поднят до 15 (соответствует реальной шкале ADX,
-# где <20 обычно означает слабый/боковой тренд), максимум — до 40.
+# --- ФИЛЬТРЫ И АНАЛИТИКА ---
 def get_memory(symbol, interval):
     key = f"{symbol}_{interval}"
     if not os.path.exists(MEM_FILE): return {"min_adx": 15}
@@ -282,38 +320,6 @@ def update_memory(symbol, interval, reason):
         except Exception as e:
             print(f"Memory update error: {e}")
 
-# ИЗМЕНЕНО: промпт расширен (больше контекста, структурированный JSON-ответ,
-# логирование причины решения). Поведение при сбое API оставлено fail-open
-# (пропускаем сделку), т.к. это лишь один из нескольких фильтров, но теперь
-# причина сбоя явно видна в логах, а не тихо проглатывается.
-def ask_ai_oracle(symbol, signal, current_price, rsi, adx, recent_closes):
-    try:
-        closes_sample = recent_closes[-30:] if len(recent_closes) >= 30 else recent_closes
-        price_change_pct = ((closes_sample[-1] - closes_sample[0]) / closes_sample[0]) * 100 if closes_sample and closes_sample[0] else 0
-        prompt = (
-            f"Ты риск-менеджер криптотрейдинга. Оцени вход в сделку.\n"
-            f"Инструмент: {symbol}\nНаправление сигнала: {signal}\nТекущая цена: {current_price}\n"
-            f"RSI(14): {rsi:.1f}\nADX(14): {adx:.1f}\n"
-            f"Изменение цены за последние {len(closes_sample)} свечей: {price_change_pct:+.2f}%\n"
-            f"Последние 10 цен закрытия: {closes_sample[-10:]}\n\n"
-            f"Проанализируй риск быстрого отката против направления сделки. "
-            f'Ответь строго в формате JSON без markdown-разметки: '
-            f'{{"decision": "APPROVE" или "REJECT", "reason": "краткое обоснование одним предложением"}}'
-        )
-        response = client.models.generate_content(model='gemini-1.5-flash', contents=prompt)
-        raw = response.text.strip().replace('```json', '').replace('```', '').strip()
-        parsed = json.loads(raw)
-        decision = str(parsed.get("decision", "APPROVE")).upper()
-        reason = parsed.get("reason", "")
-        print(f"[AI Oracle] {symbol} {signal}: {decision} — {reason}")
-        return "APPROVE" in decision
-    except Exception as e:
-        print(f"AI Oracle Error: {e} — сигнал пропущен без ИИ-фильтра (fail-open)")
-        return True
-
-# ИЗМЕНЕНО: раньше фильтр пропускал почти любую сделку (диапазон 0.85-1.15
-# перекрывал почти все реальные значения ratio). Теперь требуется реальный
-# перевес объёма в сторону сделки.
 def check_order_book(symbol, signal_type):
     url = f"https://data-api.binance.vision/api/v3/depth?symbol={symbol}&limit=20"
     try:
@@ -328,19 +334,13 @@ def check_order_book(symbol, signal_type):
         ratio = bids / asks
 
         if signal_type == "LONG":
-            return ratio >= 1.05   # реально больше покупателей, чем продавцов
+            return ratio >= 1.05   
         else:
-            return ratio <= 0.95   # реально больше продавцов, чем покупателей
+            return ratio <= 0.95   
     except Exception as e:
         print(f"Order Book Error for {symbol}: {e}")
         return True
 
-# НОВОЕ: единая функция построения индикаторов одним проходом по pandas.
-# Заменяет старую get_advanced_filters. Считает: EMA200, RSI14, НАСТОЯЩИЙ
-# ADX по методу Wilder (+DI/-DI/DX), полосы 3-сигма, ATR14, детекцию аномалий
-# и объёмной кульминации. Используется и для текущей свечи, и для поиска
-# исторических аналогов в KNN — раньше исторические точки сравнивались только
-# по сырым цена/объём признакам, без индикаторного контекста.
 def build_feature_frame(candles):
     cols = ['ts', 'open', 'high', 'low', 'close', 'vol', 'i1', 'i2', 'i3', 'i4', 'i5', 'i6']
     df = pd.DataFrame(candles, columns=cols)
@@ -357,7 +357,6 @@ def build_feature_frame(candles):
     rs = ema_gain / ema_loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    # --- Настоящий ADX (Wilder), было: суррогат "волатильность/средняя_волатильность*20" ---
     up_move = df['high'].diff()
     down_move = -df['low'].diff()
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
@@ -399,11 +398,6 @@ def get_macro_trend():
 def calculate_distance(f1, f2, weights):
     return math.sqrt(sum(w * (a - b) ** 2 for w, a, b in zip(weights, f1, f2)))
 
-# ИЗМЕНЕНО: полностью переработанный KNN.
-# 1) NEIGHBORS 5 -> 15, HISTORY_LIMIT 300 -> 700 (устойчивее статистика)
-# 2) Признаков было 3, стало 5 (+ отклонение от EMA200, + RSI)
-# 3) Голосование было по простому большинству, стало взвешенным по расстоянию
-#    (более похожие исторические точки имеют больший вес)
 def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
     row = df.iloc[current_idx]
     ema200 = row['ema200']; adx = row['adx']; rsi = row['rsi']
@@ -442,7 +436,6 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
     curr_fp = feature_vec(current_idx)
 
     distances = []
-    # 210 — обеспечиваем прогрев EMA200/ADX перед началом поиска аналогов
     for hist_i in range(210, current_idx - 10):
         if np.isnan(atr_arr[hist_i]) or atr_arr[hist_i] == 0:
             continue
@@ -497,16 +490,11 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
             if not check_order_book(symbol, signal):
                 return None, 0, "", "🛡 Стакан против сделки (Дисбаланс)"
 
-            if interval != "15m":
-                closes_list = closes.tolist()
-                ai_approved = ask_ai_oracle(symbol, signal, curr_p, rsi, adx, closes_list)
-                if not ai_approved:
-                    return None, 0, "", "🛡 Отклонено ИИ-Оракулом"
-
         conviction = "⚡️ 4H АКТИВНЫЙ" if is_4h else ("🔥 ВЫСОКАЯ (Риск 2.0%)" if max(up_ratio, down_ratio) >= 0.75 else "⚡️ СРЕДНЯЯ (Риск 1.0%)")
         return signal, max(1.5, avg_move), conviction, ""
 
-    return None, 0, "", ""
+    # НОВОЕ: Если паттерн просто не нашелся, отдаем явную причину для логирования
+    return None, 0, "", "🛡 Нет уверенного паттерна (KNN)"
 
 # --- МЕНЮ ---
 def get_main_keyboard():
@@ -515,18 +503,16 @@ def get_main_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "📈 ОТКРЫТЫЕ СДЕЛКИ (Live)", "callback_data": "SHOW_LIVE_TRADES"}],
-            [{"text": "📊 ОБЩИЙ PNL И АНАЛИТИКА", "callback_data": "SHOW_STATS"}],
+            [{"text": "📊 PNL И АНАЛИТИКА", "callback_data": "SHOW_STATS"},
+             {"text": "🚫 ОТКАЗЫ ФИЛЬТРОВ", "callback_data": "SHOW_REJECTS"}],
             [{"text": "📜 ИСТОРИЯ И КУЛДАУНЫ", "callback_data": "SHOW_HISTORY"}],
-            [{"text": "🧠 СТАТУС ОБУЧЕНИЯ ИИ", "callback_data": "SHOW_AI_MEMORY"}],
+            [{"text": "🧠 СТАТУС АДАПТАЦИИ (ADX)", "callback_data": "SHOW_AI_MEMORY"}],
             [{"text": f"📡 СИГНАЛЫ: {signals_status}", "callback_data": "TOGGLE_SIGNALS"},
              {"text": f"⏱ СКАЛЬП: {scalp_status}", "callback_data": "TOGGLE_SCALP"}]
         ]
     }
 
 # --- ПОТОК КОНТРОЛЯ СДЕЛОК ---
-# ИЗМЕНЕНО: 1) таймаут больше не удаляет сделку молча — фиксируется как TIMEOUT
-#           2) PnL везде уменьшается на FEE_SLIPPAGE_PCT (комиссия+проскальзывание)
-#           3) операции с active_trades обёрнуты в lock
 def trade_monitor():
     print("Trade Monitor Thread Online...")
     while True:
@@ -598,7 +584,7 @@ def trade_monitor():
                         hit_result = "TP2"
 
                 if tp1_just_hit and not hit_result:
-                    new_msg = trade["original_msg"].replace("🤖 **AI ALERT", f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]")
+                    new_msg = trade["original_msg"].replace("🤖 **АЛГО АЛЕРТ", f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]")
                     trade["original_msg"] = new_msg
                     with active_trades_lock:
                         if key in active_trades:
@@ -617,7 +603,7 @@ def trade_monitor():
                         pnl_percent = ((close_price - trade["entry"]) / trade["entry"]) * 100
                     else:
                         pnl_percent = ((trade["entry"] - close_price) / trade["entry"]) * 100
-                    pnl_percent -= FEE_SLIPPAGE_PCT  # НОВОЕ: комиссия и проскальзывание
+                    pnl_percent -= FEE_SLIPPAGE_PCT
 
                     save_local_stat(trade["label_name"], hit_result, pnl_percent)
                     update_memory(trade["symbol"], trade["interval_name"], hit_result)
@@ -627,7 +613,7 @@ def trade_monitor():
                     add_to_ledger(ledger_entry)
 
                     header = f"✅ **[{trade['label_name']} | ТЕЙК 2 ВЗЯТ]" if hit_result == "TP2" else (f"⚖️ **[{trade['label_name']} | БЕЗУБЫТОК]" if hit_result == "BE" else f"❌ **[{trade['label_name']} | СТОП-ЛОСС]")
-                    updated_msg = trade["original_msg"].replace("🤖 **AI ALERT", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
+                    updated_msg = trade["original_msg"].replace("🤖 **АЛГО АЛЕРТ", header).replace(f"🟡 **[{trade['label_name']} | TP1 ВЗЯТ]", header)
                     updated_msg += f"\n\n**Итог сделки:**\nПричина: {hit_result}\nЦена закрытия: `{close_price:.4f}`\nРезультат (с учетом комиссии): **{pnl_percent:+.2f}%**"
 
                     for chat_id, msg_id in trade["messages"]:
@@ -644,12 +630,6 @@ def trade_monitor():
         time.sleep(2)
 
 # --- ПОТОК СКАНИРОВАНИЯ РЫНКА ---
-# ИЗМЕНЕНО: 1) HISTORY_LIMIT вместо 300, минимальный размер истории поднят до 250
-#           (нужен прогрев EMA200/ADX)
-#           2) ATR берётся из настоящего Wilder ATR14, а не грубого среднего
-#           3) SL/TP1 считаются по новым множителям (R:R исправлен)
-#           4) добавлена проверка лимита однонаправленных сделок на ТФ
-#           5) операции с active_trades обёрнуты в lock
 def scan_timeframe(interval_name, label_name, cooldown_sec):
     print(f"Scanner thread started for {interval_name} ({label_name})...")
     last_alerts = {}
@@ -708,12 +688,14 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                 curr_p = df['close'].iloc[current_idx]
                 effective_macro = "NEUTRAL" if interval_name == "15m" else macro_trend
 
-                signal, tp_atr_mult, conviction, _ = predict_knn(df, symbol, interval_name, current_idx, atr, effective_macro)
+                signal, tp_atr_mult, conviction, reject_reason = predict_knn(df, symbol, interval_name, current_idx, atr, effective_macro)
+
+                # НОВОЕ: Логирование причины отказа, если сигнал отклонен
+                if not signal and reject_reason:
+                    log_reject(interval_name, reject_reason)
+                    continue
 
                 if signal:
-                    # НОВОЕ: защита от корреляционного риска — не открываем 3-ю
-                    # сделку в одном направлении на одном ТФ (это не диверсификация,
-                    # а утроенная ставка на один и тот же рыночный сценарий).
                     with active_trades_lock:
                         same_dir_count = sum(
                             1 for t in active_trades.values()
@@ -734,7 +716,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                     sl_dist = atr * SL_ATR_MULT
                     tp1_dist = atr * TP1_ATR_MULT
-                    # гарантируем, что TP2 всегда заметно дальше TP1, а не совпадает с ним
                     tp2_dist = max(tp1_dist * 1.3, atr * tp_atr_mult)
 
                     if signal == "LONG":
@@ -749,10 +730,10 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
                         emo = "🔴"
 
                     msg_text = (
-                        f"🤖 **AI ALERT | {sym_name}/USDT**  {tag}\n"
+                        f"🤖 **АЛГО АЛЕРТ | {sym_name}/USDT**  {tag}\n"
                         f"⏳ **Срок:** `{label_name}` ({interval_name})\n"
                         f"📉 **Направление:** {emo} **{signal}**\n\n"
-                        f"> Уверенность ИИ: {conviction}\n"
+                        f"> Сила сигнала: {conviction}\n"
                         f"> Макро-тренд (1D): **{effective_macro}**\n\n"
                         f"**Ордера (Нажми для копирования):**\n"
                         f"Вход: `{curr_p:.4f}`\n"
@@ -876,11 +857,14 @@ def bot_engine():
                             mem_txt += f"🔹 `{k}`: ADX **{adx}** ({status})\n"
                         if not mem_txt: mem_txt = "Бот работает на базовых настройках (ADX: 15)."
 
-                        msg = f"🧠 **СТАТУС ОБУЧЕНИЯ ИИ (Адаптация)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n{mem_txt}\n\n💡 *Бот повышает требования к тренду (ADX) после убытков, чтобы защитить капитал.*"
+                        msg = f"🧠 **СТАТУС АДАПТАЦИИ (ADX)**\n➖➖➖➖➖➖➖➖➖➖➖➖\n{mem_txt}\n\n💡 *Бот повышает требования к тренду (ADX) после убытков, чтобы защитить капитал.*"
                         edit_msg(chat_id, message_id, msg, get_main_keyboard())
 
                     elif data == "SHOW_STATS":
                         edit_msg(chat_id, message_id, generate_local_report(), get_main_keyboard())
+                        
+                    elif data == "SHOW_REJECTS":
+                        edit_msg(chat_id, message_id, generate_reject_report(), get_main_keyboard())
 
                     elif data == "TOGGLE_SCALP":
                         global SCALP_ENABLED
@@ -904,7 +888,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "AI Trading Bot Active (Professional Dashboard Mode)"
+def home(): return "Trading Bot Active (Math Only + Telemetry)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
