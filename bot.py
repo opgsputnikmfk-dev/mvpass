@@ -22,26 +22,26 @@ ACTIVE_TRADES_FILE = "active_trades_memory.json"
 STATS_FILE = "bot_stats.json"
 COOLDOWNS_FILE = "cooldowns_memory.json"
 LEDGER_FILE = "bot_ledger.json"
-REJECT_STATS_FILE = "reject_stats.json"  # файл для статистики отказов
+REJECT_STATS_FILE = "reject_stats.json"  
 
 SCAN_INTERVAL = 60
 
 # --- ПАРАМЕТРЫ KNN ---
-NEIGHBORS = 15
-HISTORY_LIMIT = 700
-MIN_NEIGHBOR_VOTES_RATIO = 0.4
-FEATURE_WEIGHTS = [1.0, 1.0, 0.3, 0.6, 0.4]
+NEIGHBORS = 15                    
+HISTORY_LIMIT = 700               
+MIN_NEIGHBOR_VOTES_RATIO = 0.4    
+FEATURE_WEIGHTS = [1.0, 1.0, 0.3, 0.6, 0.4]  
 
 # --- ГЛОБАЛЬНЫЕ ПЕРЕКЛЮЧАТЕЛИ И ЛИМИТЫ ---
 SIGNALS_ENABLED = True
 SCALP_ENABLED = True
 MAX_TRADES_PER_TF = 3
-MAX_SAME_DIRECTION_PER_TF = 2
+MAX_SAME_DIRECTION_PER_TF = 2     
 
 # --- РИСК-МЕНЕДЖМЕНТ ---
 SL_ATR_MULT = 1.5
-TP1_ATR_MULT = 1.5
-FEE_SLIPPAGE_PCT = 0.12
+TP1_ATR_MULT = 1.5                
+FEE_SLIPPAGE_PCT = 0.12           
 
 # --- ПОТОКОБЕЗОПАСНОСТЬ ---
 active_trades_lock = threading.Lock()
@@ -63,7 +63,7 @@ load_rejects()
 
 def log_reject(interval, reason):
     if not reason: return
-    # Убираем эмодзи для более чистой группировки
+    # Убираем эмодзи для чистой группировки. Динамических цифр тут больше нет.
     clean_reason = reason.replace("🛡 ", "").replace("🛡", "").strip()
     
     with rejects_lock:
@@ -436,15 +436,52 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
     curr_fp = feature_vec(current_idx)
 
     distances = []
+    
+    # --- ИСПРАВЛЕННАЯ СИМУЛЯЦИЯ (PATH-DEPENDENT) ---
+    # Бот симулирует следующие 20 свечей и проверяет, что наступит раньше: TP или SL
+    lookahead = 20
+    
     for hist_i in range(210, current_idx - 10):
         if np.isnan(atr_arr[hist_i]) or atr_arr[hist_i] == 0:
             continue
+            
         h_fp = feature_vec(hist_i)
         dist = calculate_distance(curr_fp, h_fp, FEATURE_WEIGHTS)
         h_atr = atr_arr[hist_i]
-        future_move = closes[hist_i + 5] - closes[hist_i]
-        outcome = 1 if future_move > h_atr * 0.5 else (-1 if future_move < -h_atr * 0.5 else 0)
-        distances.append((dist, outcome, abs(future_move) / h_atr))
+        
+        target_move = h_atr * SL_ATR_MULT 
+        outcome = 0
+        actual_move = 0.0
+        
+        end_idx = min(hist_i + lookahead, len(closes))
+        
+        for j in range(hist_i + 1, end_idx):
+            hit_up = highs[j] >= closes[hist_i] + target_move
+            hit_down = lows[j] <= closes[hist_i] - target_move
+            
+            if hit_up and not hit_down:
+                outcome = 1
+                actual_move = (highs[j] - closes[hist_i]) / h_atr
+                break
+            elif hit_down and not hit_up:
+                outcome = -1
+                actual_move = (closes[hist_i] - lows[j]) / h_atr
+                break
+            elif hit_up and hit_down:
+                outcome = 0  # Слишком сильная волатильность в рамках одной свечи, пропускаем
+                break
+                
+        # Если в рамках окна ни тейк, ни стоп не достигнуты, смотрим итоговое закрытие
+        if outcome == 0:
+            future_move = closes[end_idx - 1] - closes[hist_i]
+            if future_move > h_atr * 0.5:
+                outcome = 1
+                actual_move = abs(future_move) / h_atr
+            elif future_move < -h_atr * 0.5:
+                outcome = -1
+                actual_move = abs(future_move) / h_atr
+                
+        distances.append((dist, outcome, actual_move))
 
     if len(distances) < NEIGHBORS:
         return None, 0, "", "🛡 Недостаточно исторических данных"
@@ -493,9 +530,8 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
         conviction = "⚡️ 4H АКТИВНЫЙ" if is_4h else ("🔥 ВЫСОКАЯ (Риск 2.0%)" if max(up_ratio, down_ratio) >= 0.75 else "⚡️ СРЕДНЯЯ (Риск 1.0%)")
         return signal, max(1.5, avg_move), conviction, ""
 
-    # НОВОЕ: Логирование фактического ratio
-    best_ratio = max(up_ratio, down_ratio)
-    return None, 0, "", f"🛡 Нет паттерна (макс. результат {best_ratio:.2f})"
+    # Убрали динамические значения, чтобы не ломался JSON и меню
+    return None, 0, "", "🛡 Нет уверенного паттерна (KNN)"
 
 # --- МЕНЮ ---
 def get_main_keyboard():
@@ -691,7 +727,6 @@ def scan_timeframe(interval_name, label_name, cooldown_sec):
 
                 signal, tp_atr_mult, conviction, reject_reason = predict_knn(df, symbol, interval_name, current_idx, atr, effective_macro)
 
-                # НОВОЕ: Логирование причины отказа, если сигнал отклонен
                 if not signal and reject_reason:
                     log_reject(interval_name, reject_reason)
                     continue
@@ -889,7 +924,7 @@ def bot_engine():
             time.sleep(10)
 
 @app.route('/')
-def home(): return "Trading Bot Active (Math Only + Telemetry)"
+def home(): return "Trading Bot Active (Path-Dependent KNN + Fixes)"
 
 if __name__ == "__main__":
     threading.Thread(target=bot_engine, daemon=True).start()
