@@ -63,7 +63,6 @@ load_rejects()
 
 def log_reject(interval, reason):
     if not reason: return
-    # Убираем эмодзи для чистой группировки. Динамических цифр тут больше нет.
     clean_reason = reason.replace("🛡 ", "").replace("🛡", "").strip()
     
     with rejects_lock:
@@ -438,7 +437,6 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
     distances = []
     
     # --- ИСПРАВЛЕННАЯ СИМУЛЯЦИЯ (PATH-DEPENDENT) ---
-    # Бот симулирует следующие 20 свечей и проверяет, что наступит раньше: TP или SL
     lookahead = 20
     
     for hist_i in range(210, current_idx - 10):
@@ -468,10 +466,9 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
                 actual_move = (closes[hist_i] - lows[j]) / h_atr
                 break
             elif hit_up and hit_down:
-                outcome = 0  # Слишком сильная волатильность в рамках одной свечи, пропускаем
+                outcome = 0  
                 break
                 
-        # Если в рамках окна ни тейк, ни стоп не достигнуты, смотрим итоговое закрытие
         if outcome == 0:
             future_move = closes[end_idx - 1] - closes[hist_i]
             if future_move > h_atr * 0.5:
@@ -530,7 +527,6 @@ def predict_knn(df, symbol, interval, current_idx, atr, macro_trend):
         conviction = "⚡️ 4H АКТИВНЫЙ" if is_4h else ("🔥 ВЫСОКАЯ (Риск 2.0%)" if max(up_ratio, down_ratio) >= 0.75 else "⚡️ СРЕДНЯЯ (Риск 1.0%)")
         return signal, max(1.5, avg_move), conviction, ""
 
-    # Убрали динамические значения, чтобы не ломался JSON и меню
     return None, 0, "", "🛡 Нет уверенного паттерна (KNN)"
 
 # --- МЕНЮ ---
@@ -552,6 +548,14 @@ def get_main_keyboard():
 # --- ПОТОК КОНТРОЛЯ СДЕЛОК ---
 def trade_monitor():
     print("Trade Monitor Thread Online...")
+    
+    # Динамические таймауты (каждой сделке дается 48 свечей на отработку)
+    TIMEOUTS = {
+        "15m": 43200,   # 12 часов
+        "1h": 172800,   # 48 часов (2 суток)
+        "4h": 691200    # 192 часа (8 суток)
+    }
+
     while True:
         try:
             with active_trades_lock:
@@ -561,7 +565,11 @@ def trade_monitor():
                 if key not in active_trades:
                     continue
 
-                if time.time() - trade.get("timestamp", time.time()) > 43200:
+                # Берем нужный таймаут в зависимости от таймфрейма
+                interval = trade.get("interval_name", "15m")
+                max_duration = TIMEOUTS.get(interval, 43200)
+
+                if time.time() - trade.get("timestamp", time.time()) > max_duration:
                     price = get_current_price(trade["symbol"]) or trade["entry"]
                     if trade["signal"] == "LONG":
                         pnl_percent = ((price - trade["entry"]) / trade["entry"]) * 100
@@ -573,9 +581,10 @@ def trade_monitor():
                     ledger_entry = f"⌛ {trade['symbol']} ({trade['interval_name']}) | TIMEOUT | {pnl_percent:+.2f}%"
                     add_to_ledger(ledger_entry)
 
+                    timeout_hours = max_duration // 3600
                     updated_msg = trade["original_msg"] + (
                         f"\n\n**Итог сделки:**\nПричина: TIMEOUT "
-                        f"(сигнал не дошел ни до тейка, ни до стопа за 12ч)\n"
+                        f"(сигнал не закрылся за {timeout_hours}ч)\n"
                         f"Цена на момент закрытия: `{price:.4f}`\n"
                         f"Результат (с учетом комиссии): **{pnl_percent:+.2f}%**"
                     )
