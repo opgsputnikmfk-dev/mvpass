@@ -1,0 +1,44 @@
+Validation summary — 2026-10-29
+
+Environment actually used:
+Python 3.12.14
+NumPy 2.3.5
+pandas 2.2.3
+
+Original RTF extraction:
+946 Python lines recovered with indentation preserved.
+Syntax compile passed. Original application was NOT executed.
+
+Replacement source:
+python -m py_compile bot.py backtest.py download_data.py
+Result: PASS.
+
+Regression suite:
+python -m unittest -v test_bot
+Result: 31 tests passed, 0 failures, 0 errors.
+Two logged Telegram notification failures are deliberately injected by a test;
+the test confirms that the closed trade stays recorded despite delivery failure.
+All tests were offline. No Telegram messages or exchange orders were sent.
+
+Command-line smoke checks:
+bot.py --help: PASS
+backtest.py --help: PASS
+download_data.py --help: PASS
+bot.py --report using a temporary empty paper database: PASS, initial 10000 USDT.
+
+Full strategy smoke run on generated data:
+Seed 71; 18000 artificial one-minute candles; 15m strategy.
+2716 evaluation minute events processed after warmup.
+0 closed trades. Equity finite; final equity reconciles to closed trade PnL.
+This checks execution of the unmocked indicator/KNN/replay path, not profitability.
+Trade-entry/exit and end-of-sample accounting paths are separately covered by
+the regression suite using explicitly controlled scenarios.
+
+NOT VERIFIED:
+- Profitability, winrate or drawdown on the user's actual market period.
+- Live exchange/Telegram connectivity or actual fills.
+- Live hosting/deployment/restart environment.
+- Combined historical multi-symbol portfolio performance.
+- Actual fee tier, funding completeness of external data, order queues/liquidity.
+
+No claim of improved return follows from these engineering checks.
