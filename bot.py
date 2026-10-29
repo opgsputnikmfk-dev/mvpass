@@ -23,6 +23,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+import dashboard
+
 import numpy as np
 import pandas as pd
 
@@ -671,33 +673,20 @@ def summarize_trades(trades):
 
 def report(store, cfg):
     with store.lock:
-        state, trades = store.snapshot(), store.trades()
-    equity = account_equity(state)
-    lines = ['PAPER: МОДЕЛЬНЫЙ СЧЁТ (не результат биржевых исполнений)',
-             f'Рынок: {cfg.market}; начальный капитал: {cfg.initial_equity:.2f} USDT',
-             f'Баланс: {state["balance"]:.2f}; капитал с оценкой закрытия: {equity:.2f} USDT',
-             f'Доходность модельного счёта: {(equity/cfg.initial_equity-1)*100:+.2f}%',
-             f'Макс. просадка по наблюдавшимся отметкам: {state["max_drawdown"]*100:.2f}%',
-             f'Открыто: {len(state["positions"])}; ожидают входа: {len(state["pending"])}',
-             f'Пауза дня: {state["day_paused"]}; пауза просадки: {state["dd_paused"]}']
-    for tf in TF_MS:
-        m = summarize_trades([t for t in trades if t['tf'] == tf])
-        pf = f'{m["profit_factor"]:.2f}' if m['profit_factor'] is not None else 'н/д (нет убытков)'
-        lines.extend(['', f'{tf}: {m["trades"]} закрытых; прибыльных {m["winrate_pct"]:.1f}%',
-                      f'Net: {m["net_pnl"]:+.2f} USDT; PF {pf}; средний R {m["average_r"]:+.3f}',
-                      f'Комиссии: {m["fees"]:.2f}; funding: {m["funding_paid"]:+.2f} USDT'])
-    return '\n'.join(lines)
+        state = store.snapshot()
+    return dashboard.overview(state, cfg, account_equity(state))
 
 
 def keyboard():
+    def button(text, action):
+        return {'text': text, 'callback_data': action}
     return {'inline_keyboard': [
-        [{'text': 'Открытые сделки', 'callback_data': 'SHOW_LIVE_TRADES'}],
-        [{'text': 'PnL и риск', 'callback_data': 'SHOW_STATS'},
-         {'text': 'Отказы', 'callback_data': 'SHOW_REJECTS'}],
-        [{'text': 'История', 'callback_data': 'SHOW_HISTORY'},
-         {'text': 'Параметры', 'callback_data': 'SHOW_AI_MEMORY'}],
-        [{'text': 'Пауза / запуск сигналов', 'callback_data': 'TOGGLE_SIGNALS'},
-         {'text': '15m ВКЛ / ВЫКЛ', 'callback_data': 'TOGGLE_SCALP'}]]}
+        [button('Обзор', 'SHOW_STATS'), button('Позиции', 'SHOW_LIVE_TRADES')],
+        [button('Сегодня', 'AN_TODAY'), button('7 дней', 'AN_7D'), button('30 дней', 'AN_30D')],
+        [button('Вся аналитика', 'AN_ALL'), button('Монеты и выходы', 'DETAILS')],
+        [button('История', 'SHOW_HISTORY'), button('Скачать CSV', 'EXPORT_CSV')],
+        [button('Состояние', 'STATUS'), button('Фильтры', 'SHOW_REJECTS')],
+        [button('Настройки', 'SHOW_AI_MEMORY'), button('Управление', 'CONTROLS')]]}
 
 
 class Telegram:
@@ -732,6 +721,18 @@ class Telegram:
                     self.call('sendMessage', data)
                 chunk = ''
             chunk += line[:3800]
+
+    def document(self, chat, name, content):
+        boundary = 'paperbot' + uuid.uuid4().hex
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
+                f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{name}"\r\n'
+                'Content-Type: text/csv\r\n\r\n').encode() + content + f'\r\n--{boundary}--\r\n'.encode()
+        req = urllib.request.Request('https://api.telegram.org/bot'+self.token+'/sendDocument', data=body,
+                                     headers={'Content-Type': 'multipart/form-data; boundary='+boundary})
+        with urllib.request.urlopen(req, timeout=60) as response:
+            result = json.load(response)
+        if not result.get('ok'):
+            raise RuntimeError('Telegram export rejected')
 
     def notify(self, message):
         for recipient in set(self.admins) | ({self.channel} if self.channel else set()):
@@ -887,7 +888,18 @@ class Runtime:
 
     def handle_action(self, action):
         s = self.store.snapshot()
-        if action == 'SHOW_STATS':
+        if action.startswith('AN_') and action[3:] in dashboard.PERIODS:
+            return dashboard.analytics(self.store.trades(), action[3:])
+        if action == 'DETAILS':
+            return dashboard.breakdown(self.store.trades())
+        if action == 'STATUS':
+            return (f'СОСТОЯНИЕ / v{dashboard.VERSION}\nМодельный счёт\n'
+                    f'Последний успешный цикл: {dashboard.stamp(self.last_success*1000)}\n'
+                    f'Ошибка цикла: {self.last_error or "нет"}\n'
+                    f'Рынок: {self.cfg.market}\n'
+                    'Статус цикла отсчитывается с запуска этого процесса.')
+        if action in ('SHOW_STATS', 'MENU'):
+
             return report(self.store, self.cfg)
         if action == 'SHOW_LIVE_TRADES':
             rows = [f'{p["symbol"]} {p["tf"]} {p["side"]}: вход {p["entry"]:.8g}; '
@@ -949,7 +961,24 @@ class Runtime:
                     chat = msg.get('chat', {}).get('id')
                     # Authorize the actual sender, not a group chat's numeric id.
                     if sender.get('id') in self.telegram.admins and chat is not None:
-                        text = self.handle_action(callback.get('data', '') if callback else 'MENU')
+                        action = callback.get('data', '') if callback else 'MENU'
+                        if action == 'EXPORT_CSV':
+                            if callback:
+                                self.telegram.call('answerCallbackQuery', {'callback_query_id': callback['id']})
+                            self.telegram.document(chat, 'trades.csv', dashboard.ledger_csv(self.store.trades()))
+                            continue
+                        if action == 'CONTROLS':
+                            if callback:
+                                self.telegram.call('answerCallbackQuery', {'callback_query_id': callback['id']})
+                            state = self.store.snapshot()
+                            self.telegram.call('sendMessage', {'chat_id': chat, 'text':
+                                'УПРАВЛЕНИЕ\nПауза останавливает новые входы. Открытые позиции продолжают контролироваться.',
+                                'reply_markup': {'inline_keyboard': [
+                                    [{'text': 'Сигналы: '+('ВКЛ → пауза' if state['enabled'] else 'пауза → ВКЛ'), 'callback_data': 'TOGGLE_SIGNALS'}],
+                                    [{'text': 'Скальпинг: '+('ВКЛ → пауза' if state['scalp_enabled'] else 'пауза → ВКЛ'), 'callback_data': 'TOGGLE_SCALP'}],
+                                    [{'text': 'К обзору', 'callback_data': 'SHOW_STATS'}]]}})
+                            continue
+                        text = self.handle_action(action)
                         if callback:
                             self.telegram.call('answerCallbackQuery', {'callback_query_id': callback['id']})
                         self.telegram.send(chat, text, menu=True)
