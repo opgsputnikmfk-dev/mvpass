@@ -1,18 +1,18 @@
-"""Telegram signal bot v2.3 using spot candles as a futures-signal reference. PAPER ONLY: no order API and no exchange credentials.
+"""AI Crypto 3: causal 1h trend / 15m pullback / 5m trigger, LONG and SHORT.
 
-Deployment: replace only bot.py; keep the existing requirements.txt and TELEGRAM_TOKEN.
-The supplied owner ID is the fallback when ADMIN_CHAT_IDS is absent/empty.
-This version uses public spot candles to generate LONG/SHORT reference signals.
-It does not fetch futures quotes or funding. Compare levels with the target contract.
-MARKET from older deployments is ignored. A separate paper_spot_signals.sqlite3 is used.
-Existing spot/futures accounts remain untouched; this is a different research model.
-Keep DATA_DIR on persistent storage to retain history across server replacements.
-Telegram /start or /menu opens one editable panel; alerts and CSV remain separate.
-Python 3.12 and the previous numpy/pandas requirements are supported.
+Public Binance Spot data is a reference for manually checking futures ideas.
+PAPER ONLY: no order API, exchange credentials, funding feed or profit promise.
+Start: python bot.py. TELEGRAM_TOKEN remains in the existing environment.
+ADMIN_CHAT_IDS defaults to the owner's previously supplied Telegram ID.
+MARKET from old releases cannot change the public spot data source.
+The new strategy uses paper_pullback_v3.sqlite3, leaving old DBs untouched.
+DATA_DIR must be persistent to survive server replacements. Free Render storage
+is ephemeral; this release does not purchase or silently provision resources.
 
-Signals use closed candles. Paper fills are committed for the next full minute
-before its open is observed and settled using closed 1m OHLC. Intrabar order is
-unknown: an existing stop wins a tie; a new break-even stop starts next bar.
+Only closed candles are used. Fills are scheduled for a future full minute before
+its opening price is observed. Closed 1m bars settle trades; stop wins an ambiguous
+stop/target candle. One full exit at 2x stop distance, before execution costs.
+Telegram menus edit one message. Signals, outcomes and requested CSV are separate.
 """
 from __future__ import annotations
 
@@ -41,14 +41,26 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
-BOT_VERSION = '2.4 · Удобный дашборд'
+BOT_VERSION = '3.0.0 · Тренд и откат'
+STRATEGY_ID = 'pullback_1h_15m_5m_v1'
 PERIODS = {'ALL': 'Всё время', 'TODAY': 'Сегодня · UTC', '7D': 'Последние 7 дней', '30D': 'Последние 30 дней'}
-MODES = {'15m': 'Быстрые сделки · 15 мин', '1h': 'Внутри дня · 1 час', '4h': 'Длительные сделки · 4 часа'}
+MODES = {'5m': 'Тренд → откат → вход · 1ч / 15м / 5м'}
 SIDES = {'LONG': 'На рост · LONG', 'SHORT': 'На падение · SHORT'}
 EXITS = {'SL': 'Защитный стоп', 'BE': 'Защитный стоп после первой цели',
+         'TP': 'Цель достигнута',
          'TP1': 'Первая цель', 'TP2': 'Вторая цель', 'TIMEOUT': 'Истекло время ожидания',
          'END_OF_DATA': 'Конец данных проверки'}
 REASONS = {
+    'trend_unclear': 'Ждём понятное направление на часовом графике',
+    'pullback_wait': 'Направление есть; ждём откат на 15 минутах',
+    'structure_broken': 'Откат сломал предыдущее движение',
+    'trigger_wait': 'Откат найден; ждём подтверждение на 5 минутах',
+    'move_too_large': 'Цена уже слишком резко ушла вперёд',
+    'stop_distance': 'Не подходит расстояние до защитного стопа',
+    'costs_too_high': 'Расходы слишком велики относительно движения до стопа',
+    'target_obstacle': 'До цели мешает ближайший разворотный уровень',
+    'setup_used': 'Этот откат уже дал сигнал; ждём новую ситуацию',
+    'correlated_budget': 'Лимит риска похожих движений уже занят',
     'insufficient_history': 'Пока недостаточно истории цен',
     'range_or_volume_anomaly': 'Слишком резкое движение цены или необычный объём торгов',
     'adx': 'Движение рынка пока недостаточно выражено',
@@ -106,59 +118,60 @@ def trade_metrics(trades):
 
 def overview(state, cfg, equity):
     positions = list(state['positions'].values())
-    open_result = sum(p['gross_pnl']-p['fees']-p['funding_paid'] for p in positions) + equity-state['balance']
+    change = equity-cfg.initial_equity
+    now = int(time.time()*1000)
+    recent = [v for v in state.get('candidates', {}).values() if now-v['at'] < 7*MINUTE]
     pauses = []
     if not state['enabled']: pauses.append('поиск выключен')
-    if state['day_paused']: pauses.append('дневной лимит потерь')
-    if state['dd_paused']: pauses.append('лимит просадки')
-    change = equity-cfg.initial_equity
-    lines = ['🤖 AI CRYPTO · ДАШБОРД',
-             '⏸ '+', '.join(pauses) if pauses else '🟢 Поиск включён',
-             '🧪 Учебный счёт · Binance Spot · LONG / SHORT', '',
-             '💰 БАЛАНС И РЕЗУЛЬТАТ', f'Счёт сейчас: {equity:,.2f} USDT',
-             f'{"📈" if change >= 0 else "📉"} От старта: {change:+.2f} USDT ({change/cfg.initial_equity*100:+.2f}%)',
-             f'✅ Закрытые сделки: {state["realized_net"]:+.2f} USDT',
-             f'⏳ Открытые с учётом закрытых частей: {open_result:+.2f} USDT', '',
-             '📌 СДЕЛКИ', f'Открыто: {len(positions)} / {cfg.max_positions} · Ожидают входа: {len(state["pending"])}']
-    for p in positions:
-        lines.append(f'{"🟢" if p["side"] == "LONG" else "🔴"} {p["symbol"]} · {p["side"]} · {p["tf"]}')
-    if not positions: lines.append('🔎 Открытых сделок пока нет. Причины — кнопка «Нет сигналов?»')
-    lines += ['', '⚡ РЕЖИМЫ',
-              f'15m {"✅" if state["scalp_enabled"] else "⏸"} · 1h ✅ · 4h ✅',
-              '🕒 Последняя оценка: '+stamp(max((v['at'] for v in state.get('last_evaluation',{}).values()),default=0)),
-              f'📡 Проблем с данными: {len(state.get("data_issues",{}))}', '',
-              '📋 Открой «Сделки и уровни» → выбери монету → копируй вход, SL и TP кнопками.',
-              'Расчёт по споту, без фьючерсных платежей. Ордера бот не отправляет.', f'Версия {BOT_VERSION}']
+    if state['day_paused']: pauses.append('дневная защита')
+    if state['dd_paused']: pauses.append('защита от снижения счёта')
+    if state['tf_pause_until'].get('5m', 0) > now: pauses.append('перерыв после убытков')
+    status = '⏸ '+', '.join(pauses) if pauses else '🟢 Поиск включён'
+    if not pauses and not recent: status = '🟡 Ожидаю свежую проверку рынка'
+    if state.get('data_issues'): status = '🟠 Есть проблемы с данными · см. «Связь»'
+    lines = ['◈ AI CRYPTO', 'Тренд и откат · сигналы для фьючерсов', status, '',
+             'СЧЁТ В МОДЕЛИ', f'{equity:,.2f} USDT  ·  {change:+.2f} от старта',
+             f'Закрыто сделок: {state["closed_count"]}  ·  Итог: {state["realized_net"]:+.2f} USDT', '',
+             'СЕЙЧАС', f'Открыто {len(positions)} / {cfg.max_positions}  ·  Ожидают входа {len(state["pending"])}',
+             f'Монет в обзоре: {len(state.get("universe", []))}  ·  Проверка каждые 5 минут',
+             f'Направление найдено: {sum(v["stage"] >= 1 for v in recent)}',
+             f'Откат найден: {sum(v["stage"] >= 2 for v in recent)}', '',
+             '1 час · направление   →   15 мин · откат   →   5 мин · вход',
+             'Последняя проверка: '+stamp(state.get('last_scan_close', 0)), '',
+             'Цены: Binance Spot. LONG и SHORT разрешены.',
+             'Деньги учебные. Перед входом сверь уровни с фьючерсом.',
+             f'v{BOT_VERSION}']
     return '\n'.join(lines)
 
 def analytics(trades, period='ALL'):
     rows = select_trades(trades, period)
     m = trade_metrics(rows)
-    lines = ['📊 РЕЗУЛЬТАТЫ · '+PERIODS[period], 'Модель по спотовым ценам · суммы в USDT', '',
-             f'Завершено сделок: {m["n"]}', f'Итог после расходов: {m["net"]:+.2f}',
-             f'Прибыльных: {m["wins"]} · Убыточных: {m["losses"]} · Нулевых: {m["flat"]}']
+    lines = ['📊 МОИ РЕЗУЛЬТАТЫ', PERIODS[period]+' · учебный счёт', '',
+             f'Итог после расходов: {m["net"]:+.2f} USDT',
+             f'Закрыто: {m["n"]}  ·  Прибыльных: {m["wins"]}  ·  Убыточных: {m["losses"]}']
     if rows:
-        ratio = f'{m["pf"]:.2f}' if m['pf'] is not None else 'пока нельзя сравнить — убытков нет'
-        lines += [f'Доля прибыльных: {m["winrate"]:.1f}%', f'Средний итог одной сделки: {m["avg"]:+.2f}',
-                  f'Средняя прибыль: {m["avg_win"]:+.2f}', f'Средний убыток: {m["avg_loss"]:+.2f}',
-                  f'Отношение суммы прибыли к сумме убытков: {ratio}',
-                  'Число выше 1 означает, что сумма прибылей превышает сумму убытков.',
+        ratio = f'{m["pf"]:.2f}' if m['pf'] is not None else 'пока нет убытков для сравнения'
+        avg_r = sum(t.get('net_r', 0) for t in rows)/len(rows)
+        lines += ['', 'КАЧЕСТВО СДЕЛОК', f'Доля прибыльных: {m["winrate"]:.1f}%',
+                  f'Средний результат: {m["avg"]:+.2f} USDT',
+                  f'Средняя прибыль / убыток: {m["avg_win"]:+.2f} / {m["avg_loss"]:+.2f} USDT',
+                  f'Прибыль на 1 USDT убытка: {ratio}',
+                  f'Средний итог на 1 USDT планового риска: {avg_r:+.2f}',
                   f'Самая длинная серия убытков: {m["streak"]}',
-                  f'Убыточных сделок подряд в конце периода: {m["current_streak"]}']
+                  f'Неясный порядок стопа и цели: {sum(t.get("ambiguous_bars", 0) for t in rows)} свечей',
+                  'В таких свечах модель считает сначала стоп.']
     else:
-        lines += ['Когда сделки полностью закроются, здесь появятся их результаты.']
-    lines += ['', f'Комиссии: {m["fees"]:.2f}', f'Платежи за удержание фьючерсов: нет данных, не учтены',
-              'Комиссии и поправка на исполнение уже включены. Это результат модели по споту, без фьючерсных платежей и разницы цен рынков.', '', '⏱ ПО РЕЖИМАМ']
-    for tf, name in MODES.items():
-        g=trade_metrics([t for t in rows if t['tf']==tf])
-        lines += [f'{name}: {g["net"]:+.2f} · сделок {g["n"]}']
-    lines += ['', '🟢🔴 ПО НАПРАВЛЕНИЯМ']
+        lines += ['', 'Первая статистика появится после закрытия сделок.',
+                  'Пустая история не означает, что бот выключен: открой «Что ждём».']
+    lines += ['', 'РОСТ И ПАДЕНИЕ']
     for side, name in SIDES.items():
-        g=trade_metrics([t for t in rows if t['side']==side])
-        lines += [f'{name}: {g["net"]:+.2f} · сделок {g["n"]}']
-    lines += ['', 'Период определяется по полному закрытию сделки. Частичные закрытия входят в её общий итог. Время — UTC.']
+        g = trade_metrics([t for t in rows if t['side'] == side])
+        lines.append(f'{name}: {g["net"]:+.2f} USDT · сделок {g["n"]}')
+    lines += ['', f'Учтено комиссий: {m["fees"]:.2f} USDT',
+              'Ухудшение цены исполнения тоже учтено. Платежи за удержание фьючерсов не учтены.',
+              'Это модель по спотовым ценам, а не доходность реального фьючерсного счёта.',
+              'Период — по времени полного закрытия сделки. Время: UTC.']
     return '\n'.join(lines)
-
 
 def breakdown(trades, period='ALL'):
     rows = select_trades(trades, period)
@@ -172,7 +185,7 @@ def breakdown(trades, period='ALL'):
     lines += ['', '🚪 ПРИЧИНЫ ЗАКРЫТИЯ']
     for reason, count in sorted(Counter(t['exit_reason'] for t in rows).items()):
         lines.append(f'{EXITS.get(reason, "Другая причина")}: {count}')
-    lines += [f'Дошли до первой цели: {sum(bool(t["tp1_hit"]) for t in rows)} из {len(rows)}', '', 'ПО ДНЯМ ЗАКРЫТИЯ · UTC']
+    lines += [f'Достигли цели: {sum(bool(t["tp1_hit"]) for t in rows)} из {len(rows)}', '', 'ПО ДНЯМ ЗАКРЫТИЯ · UTC']
     days=defaultdict(float)
     for t in rows: days[datetime.fromtimestamp(t['exit_ts']/1000,timezone.utc).strftime('%d.%m.%Y')] += t['net_pnl']
     for day, net in sorted(days.items(), key=lambda p: datetime.strptime(p[0], '%d.%m.%Y'), reverse=True):
@@ -187,6 +200,7 @@ def risk_report(s, cfg):
     return '\n'.join(['🛡 ЗАЩИТА СЧЁТА', 'Все суммы относятся к учебному счёту.', '',
         f'Планируемый риск одной сделки: до {cfg.risk_fraction*100:.2f}% счёта',
         f'Общий лимит планируемого риска: {cfg.max_total_risk*100:.2f}%',
+        f'Лимит похожих движений: {cfg.correlated_risk_cap*100:.2f}%',
         f'Исходный риск открытых сделок: {used:.2f} USDT',
         f'Максимум открытых сделок: {cfg.max_positions}',
         f'Максимум в одном направлении: {cfg.max_same_direction}', '',
@@ -202,20 +216,19 @@ def risk_report(s, cfg):
 
 
 def live_report(s):
-    lines = ['📌 СДЕЛКИ И УРОВНИ', '🧪 Учебный счёт · Binance Spot',
-             '📋 Нажми на число для копирования. Для кнопок выбери карточку ниже.']
+    lines = ['📌 АКТИВНЫЕ СДЕЛКИ', 'Учебный учёт · цены Binance Spot']
     for raw in s['positions'].values():
         p = Position(**raw)
-        lines += ['', f'{"🟢" if p.side == "LONG" else "🔴"} {p.symbol} · {p.side} · {p.tf}']
+        lines += ['', f'{"🟢" if p.side == "LONG" else "🔴"} {p.symbol} · {SIDES[p.side]}']
         lines += level_lines(p.entry, p.stop, p.tp1, p.tp2)
-        lines += [f'🥇 TP1: {"достигнут ✅" if p.tp1_hit else "ожидается ⏳"}',
-                  f'🕒 Данные: {stamp(p.last_bar_ts+MINUTE if p.last_bar_ts >= 0 else p.entry_ts)}']
-    if not s['positions']: lines += ['', '🔎 Открытых сделок нет.', 'Загляни в «Нет сигналов?» — там причины отказов.']
+        lines += ['Обновлено: '+stamp(p.last_bar_ts+MINUTE if p.last_bar_ts >= 0 else p.entry_ts)]
+    if not s['positions']:
+        lines += ['', 'Сейчас открытых сделок нет.', 'В разделе «Что ждём» виден текущий этап поиска.']
     if s['pending']:
-        lines += ['', '⏳ ОЖИДАЮТ УЧЕБНОГО ВХОДА']
+        lines += ['', 'ОЖИДАЮТ ВХОДА']
         for p in s['pending'].values():
-            lines.append(f'{p["symbol"]} · {p["side"]} · {p["tf"]} · {stamp(p["entry_ts"])}')
-    lines += ['', 'На фьючерсах цены могут отличаться. Перед ручным входом сверь уровни.']
+            lines.append(f'{p["symbol"]} · {SIDES[p["side"]]} · {stamp(p["entry_ts"])}')
+    lines += ['', 'Выбери сделку ниже, чтобы скопировать уровни.', 'Цены фьючерса могут отличаться.']
     return '\n'.join(lines)
 
 def history_report(trades):
@@ -230,70 +243,107 @@ def history_report(trades):
 
 
 def why_report(s):
-    lines=['🔎 ПОЧЕМУ НЕТ СИГНАЛОВ', 'Бот проверяет рынок после завершения каждого ценового интервала.', '',
-           'Проверки — это не готовые сделки. Для каждой показана первая причина отказа; последующие условия могли также не пройти.']
-    now=int(time.time()*1000)
-    if not s['enabled']: lines += ['', 'Сейчас поиск выключен вручную. Его можно включить в «Управлении».']
-    if s['day_paused'] or s['dd_paused']: lines += ['', 'Сработала защита от потерь. Подробнее — «Защита счёта».']
-    for tf,name in MODES.items():
-        lines += ['',name.upper(), f'Всего проверок: {s["evaluated"].get(tf,0)}',
-                  f'Назначено входов с начала этого счёта: {s.get("scheduled",{}).get(tf,0)}']
-        if tf=='15m' and not s['scalp_enabled']: lines.append('Этот режим выключен вручную.')
-        if s['tf_pause_until'].get(tf,0)>now: lines.append('Перерыв после убытков до '+stamp(s['tf_pause_until'][tf]))
-        reasons=s['rejects'].get(tf,{})
-        for reason,count in sorted(reasons.items(), key=lambda x:-x[1]):
-            lines.append(f'• {REASONS.get(reason,"Другая проверка")}: {count}')
-        if not reasons: lines.append('Отказов пока нет.')
-    if s.get('data_issues'):
-        lines += ['', '⚠️ ЕСТЬ ПРОБЛЕМЫ С ДАННЫМИ']
-        for key,value in sorted(s['data_issues'].items()):
-            lines.append(f'{key.replace("_"," · ")}: {value["message"]}')
-    lines += ['', 'Счётчики накоплены с начала этого счёта. В списке также отмены уже назначенных входов. Вход назначается только после всех проверок; затем ещё может отмениться из-за движения цены или лимита риска.']
+    now = int(time.time()*1000)
+    recent = sorted(((symbol, value) for symbol, value in s.get('candidates', {}).items()
+                     if now-value['at'] < 7*MINUTE), key=lambda pair: (-pair[1]['stage'], pair[0]))
+    lines = ['🔭 ЧТО СЕЙЧАС ЖДЁМ', 'Проверка каждые 5 минут · только завершённые свечи', '']
+    if not s['enabled']: lines += ['⏸ Поиск выключен в настройках.', '']
+    if s['day_paused'] or s['dd_paused']: lines += ['🛡 Сработала защита от потерь. См. «Риск».', '']
+    lines += [f'Проверено свежих ситуаций: {len(recent)} / {len(s.get("universe", []))}',
+              f'1 · Направление есть: {sum(v["stage"] >= 1 for _,v in recent)}',
+              f'2 · Откат найден: {sum(v["stage"] >= 2 for _,v in recent)}',
+              f'3 · Подтверждение входа есть: {sum(v["stage"] >= 3 for _,v in recent)}', '',
+              'Последний шаг ещё проверяет расходы, место до цели и свободный риск.']
+    for symbol, value in recent[:12]:
+        outcome = value.get('outcome', '')
+        label = 'Вход назначен' if outcome == 'scheduled' else REASONS.get(outcome, 'Проверяю условия')
+        lines += ['', symbol+' · '+(SIDES.get(value.get('side'), 'Направление не выбрано')), label]
+    if not recent: lines += ['', 'Свежая проверка ещё не закончена. Состояние соединения — в «Связи».']
+    lines += ['', 'С НАЧАЛА ЭТОЙ СТРАТЕГИИ',
+              f'Проверок: {s["evaluated"].get("5m", 0)} · Назначено входов: {s["scheduled"].get("5m", 0)}']
+    for reason, count in sorted(s['rejects'].get('5m', {}).items(), key=lambda pair:-pair[1])[:8]:
+        lines.append(f'{REASONS.get(reason, reason)}: {count}')
+    lines += ['', 'Счётчики показывают первую причину пропуска; это не оценка эффективности фильтров.',
+              'Ожидание отката — рабочий этап поиска. Частота сигналов зависит от рынка.']
     return '\n'.join(lines)
 
 
-GUIDE = '''❓ КАК ПОЛЬЗОВАТЬСЯ
+def strategy_report():
+    return """📘 КАК ВЫБИРАЕМ СДЕЛКУ
+
+1 · НАПРАВЛЕНИЕ · 1 ЧАС
+Цена выше средней за 200 свечей, средняя за 50 свечей выше неё и растёт — ищем рост. Для падения правила зеркальные.
+
+2 · ОТКАТ · 15 МИНУТ
+После движения вперёд цена возвращается к средним за 20–50 свечей. Предыдущая точка разворота должна сохраниться.
+
+3 · ВХОД · 5 МИНУТ
+Завершённая свеча проходит максимум трёх предыдущих свечей при росте или минимум при падении. Резкий уже ушедший импульс пропускаем.
+
+СТОП И ЦЕЛЬ
+Стоп — за краем отката с небольшим запасом. Одна цель — вдвое дальше стопа от цены входа. Комиссии уменьшают фактическое соотношение прибыли к риску. Если до цели мешает известный уровень, входа нет.
+
+ПОВТОРЫ И ПОХОЖИЕ МОНЕТЫ
+Один откат даёт не больше одного сигнала. Похожие движения нескольких монет делят общий лимит риска.
+
+ПРОШЛЫЕ ПРИМЕРЫ
+Сохраняем признаки каждой сделки. После накопления независимых завершённых примеров показываем сравнение с ними; оно не запрещает вход и не является вероятностью успеха.
+
+ПРАВИЛА НОВЫЕ
+Доходность ещё нужно подтвердить на независимой истории и в наблюдении. Бот не создаёт сделки ради количества и не обещает прибыль."""
+
+
+GUIDE = """❓ ПРОСТО О БОТЕ
+
+Бот ищет сигналы для ручных сделок на фьючерсах. Он читает публичные спотовые цены Binance; ордера на биржу не отправляет.
+
+🟢 На рост (LONG) — идея заработать на росте цены.
+🔴 На падение (SHORT) — идея заработать на снижении.
+Вход — цена начала сделки. Стоп — выход при неблагоприятном движении. Цель — выход с прибылью, если цена её достигнет.
 
 📋 КОПИРОВАНИЕ
-В карточке сделки кнопки «Вход», «Стоп», «TP1», «TP2» копируют только число. «Все уровни» копирует готовую заметку. Можно также нажать на число в сообщении (на некоторых устройствах — удерживать).
-Перешли сигнал в «Избранное», чтобы сохранить его в своих сообщениях. Бот не может сам писать в твоё «Избранное».
-🟢 LONG — рост · 🔴 SHORT — падение · ⏳ ожидание · 🧪 учебная модель.
+В карточке кнопки «Вход», «Стоп» и «Цель» копируют только число. «Все уровни» — готовую заметку. Числа в тексте тоже можно копировать. Чтобы сохранить сигнал, перешли его в «Избранное».
 
-Бот анализирует спотовые свечи Binance и ищет ориентиры для сделок на рост и падение. Перед входом на фьючерсах сверяй цену, стоп и цели с выбранным контрактом. Для всех трёх режимов доступны оба направления.
+ПРЕДВАРИТЕЛЬНЫЙ СИГНАЛ И УЧЕБНЫЙ ВХОД
+Сигнал назначает вход на будущую полную минуту. После её завершения модель берёт цену открытия с поправкой на исполнение. Если цена успела далеко уйти, вход отменяется. Сверяй время: сообщение о расчётном входе не является текущей котировкой.
 
-НАПРАВЛЕНИЯ
-На рост (LONG): результат улучшается при росте цены.
-На падение (SHORT): результат улучшается при снижении цены.
+СДЕЛКИ — открытые позиции и их уровни.
+РЕЗУЛЬТАТЫ — итог после расходов, история и выгрузка CSV.
+ЧТО ЖДЁМ — на каком шаге остановился поиск.
+СВЯЗЬ — свежесть данных и ошибки.
+КАК ВЫБИРАЕМ — правила стратегии простыми словами.
+РИСК — ограничения и защитные паузы.
 
-КАК ЧИТАТЬ СИГНАЛ
-Цена входа — ориентир для начала сделки.
-Защитный стоп — уровень выхода при неблагоприятном движении.
-Первая цель — закрытие части сделки с прибылью.
-Вторая цель — закрытие оставшейся части.
-Достижение целей заранее неизвестно.
+Цены спота и фьючерса похожи, но могут отличаться. Перед ручным входом проверяй выбранный контракт и его цену. Статистика учебная; комиссии и ухудшение исполнения учтены, фьючерсные платежи за удержание — нет.
 
-ЧТО ЗНАЧАТ КНОПКИ
-Открытые сделки — вход, стоп, цели и текущая оценка результата.
-Результаты — итог завершённых сделок с учётом расходов за выбранный период.
-Подробности — результаты по монетам, дням и причинам закрытия.
-История — список отдельных завершённых сделок.
-Почему нет входа — какие проверки остановили новые сделки.
-Работает ли бот — время проверки, доступность данных и сообщения об ошибках.
-Защита счёта — ограничения риска и условия защитных пауз.
-Управление — включение поиска и быстрых сделок. Уже открытые сделки продолжают отслеживаться.
+Меню обновляется в одном сообщении. Новые сигналы, закрытия и запрошенный CSV приходят отдельно. Время везде UTC."""
 
-КАК БОТ ВЫБИРАЕТ ВХОД
-Он проверяет направление и силу движения, отсутствие резких аномалий, затем сравнивает ситуацию с прошлыми примерами. Это не вероятность успеха и не гарантия прибыли.
-
-ЧТО СЧИТАЕТ СТАТИСТИКА
-Все деньги условные. Это расчёт LONG/SHORT по спотовым ценам, а не реальная спотовая продажа без покрытия. Комиссии и ухудшение цены исполнения заложены в модель. Фьючерсные цены и платежи за удержание не загружаются; результаты не равны доходности фьючерсного счёта.
-Время показано в UTC. USDT — единица расчёта счёта.
-Новые сигналы приходят отдельными уведомлениями. Разделы меню меняются в одном сообщении.'''
+def historical_check_report():
+    path = Path(__file__).with_name('validation.json')
+    if not path.exists():
+        return '📐 ПРОВЕРКА НА ИСТОРИИ\nСохранённого отчёта рядом с bot.py нет. Текущие результаты доступны в «Результатах».'
+    result = json.loads(path.read_text(encoding='utf-8'))
+    if result.get('strategy') != STRATEGY_ID:
+        return '📐 ПРОВЕРКА НА ИСТОРИИ\nСохранённый отчёт относится к другой стратегии.'
+    assumptions = result['assumptions']
+    return '\n'.join(['📐 ПРОВЕРКА НА ИСТОРИИ',
+        result['start'][:10]+' — '+result['end_exclusive'][:10]+' (последняя дата не включена)',
+        ', '.join(result['symbols']), '',
+        f'Назначено сигналов: {result["signals"]}',
+        f'Закрыто сделок: {result["trades"]} · Прибыльных: {result["wins"]}',
+        f'Итог закрытых: {result["net_pnl"]:+.2f} USDT',
+        f'Максимальное наблюдавшееся снижение: {100*result["max_observed_drawdown"]:.2f}%',
+        f'Комиссия модели за сторону: {assumptions["fee_bps"]/100:.3f}%', '',
+        'Короткая ретроспективная проверка, не доказательство прибыльности.',
+        'Свечи спотовые. Спред и ухудшение исполнения заданы допущением, платежи фьючерсов не учтены.',
+        'Эти результаты отделены от текущего учебного счёта.'])
 
 
 def ledger_csv(trades):
     stream=io.StringIO(newline='')
-    fields=['id','symbol','tf','side','entry_ts','exit_ts','entry','qty','net_pnl','net_r','fees','funding_paid','tp1_hit','exit_reason','ambiguous_bars']
+    fields=['id','strategy_id','setup_id','symbol','tf','side','entry_ts','exit_ts','entry',
+            'initial_stop','tp2','qty','planned_risk','net_pnl','net_r','fees','funding_paid',
+            'tp1_hit','exit_reason','ambiguous_bars']
     writer=csv.DictWriter(stream,fields,extrasaction='ignore')
     writer.writeheader()
     for row in sorted(trades,key=lambda t:(t['exit_ts'],t['id'])):
@@ -346,10 +396,11 @@ def price(value):
     return format(value, '.12f').rstrip('0').rstrip('.')
 
 
-def level_lines(entry, stop, tp1, tp2):
-    return [f'🎯 Вход: `{price(entry)}`', f'🛑 Стоп-лосс: `{price(stop)}`',
-            f'🥇 Тейк-профит 1: `{price(tp1)}`', f'🥈 Тейк-профит 2: `{price(tp2)}`']
-
+def level_lines(entry, stop, tp1, tp2=None):
+    if tp2 is None or math.isclose(tp1, tp2):
+        return [f'Вход: `{price(entry)}`', f'Стоп: `{price(stop)}`', f'Цель: `{price(tp1)}`']
+    return [f'Вход: `{price(entry)}`', f'Стоп: `{price(stop)}`',
+            f'Цель 1: `{price(tp1)}`', f'Цель 2: `{price(tp2)}`']
 
 def copy_button(label, value):
     text = str(value)
@@ -359,41 +410,39 @@ def copy_button(label, value):
 
 
 def copy_levels_keyboard(p):
-    ticket = (f'{p["symbol"]} {p["side"]} · {p["tf"]}\n'
-              f'Вход: {price(p["entry"])}\nSL: {price(p["stop"])}\n'
-              f'TP1: {price(p["tp1"])}\nTP2: {price(p["tp2"])}')
+    ticket = f'{p["symbol"]} {p["side"]}\nВход: {price(p["entry"])}\nСтоп: {price(p["stop"])}\nЦель: {price(p["tp2"])}'
     return [[copy_button('📋 Вход', price(p['entry'])), copy_button('📋 Стоп', price(p['stop']))],
-            [copy_button('📋 TP1', price(p['tp1'])), copy_button('📋 TP2', price(p['tp2']))],
-            [copy_button('📋 Все уровни', ticket)]]
-
+            [copy_button('📋 Цель', price(p['tp2'])), copy_button('📋 Все уровни', ticket)]]
 
 def trade_card(raw):
     p = Position(**raw)
-    net = p.net_pnl + p.remaining * (direction(p.side) * (p.mark * (1-direction(p.side)*p.slip_rate)-p.entry)
-                                   - p.mark*(1-direction(p.side)*p.slip_rate)*p.fee_rate)
-    lines = ['📌 КАРТОЧКА СДЕЛКИ', f'{"🟢" if p.side == "LONG" else "🔴"} {p.symbol} · {p.side} · {p.tf}',
-             '🧪 Учебная сделка · цены Binance Spot', '']
+    net = p.net_pnl+p.remaining*(direction(p.side)*(p.mark*(1-direction(p.side)*p.slip_rate)-p.entry)
+                                -p.mark*(1-direction(p.side)*p.slip_rate)*p.fee_rate)
+    lines = ['◈ '+p.symbol, SIDES[p.side]+' · учебная сделка', '']
     lines += level_lines(p.entry, p.stop, p.tp1, p.tp2)
-    lines += ['', f'📍 Последняя цена: `{price(p.mark or p.entry)}`',
-              f'{"🟢" if net >= 0 else "🔴"} Итог при закрытии сейчас: {net:+.2f} USDT',
-              f'🥇 TP1: {"достигнут ✅" if p.tp1_hit else "ожидается ⏳"}',
-              f'📦 Осталось: {100*p.remaining/p.qty:.0f}% объёма',
-              f'🕒 Данные: {stamp(p.last_bar_ts+MINUTE if p.last_bar_ts >= 0 else p.entry_ts)}', '',
-              '📋 Кнопки ниже копируют число без подписи или все уровни сразу.',
-              'Спотовые уровни: перед ручным входом сверь с контрактом.']
+    lines += ['', f'Последняя цена: `{price(p.mark or p.entry)}`', f'При закрытии сейчас: {net:+.2f} USDT',
+              f'Планируемый риск: {p.planned_risk:.2f} USDT',
+              f'Выход по времени: {stamp(p.deadline)}',
+              'Обновлено: '+stamp(p.last_bar_ts+MINUTE if p.last_bar_ts >= 0 else p.entry_ts)]
+    score = p.neighbor_score
+    if score.get('samples'):
+        lines += ['', f'Похожие завершённые примеры: {score["samples"]}',
+                  f'Их средний результат на 1 USDT риска: {score["mean_r"]:+.2f}',
+                  'Справка по прошлым сделкам; не вероятность успеха.']
+    else:
+        lines += ['', 'Прошлые примеры: пока накапливаем историю.']
+    lines += ['', 'Цены Binance Spot. Сверь уровни с выбранным фьючерсом.', 'Кнопки ниже копируют числа.']
     return '\n'.join(lines)
 
-
 def signal_message(symbol, tf, pending, cfg):
-    preview = make_position(symbol, tf, pending['side'], pending['reference'], pending['atr'], pending['entry_ts'], 1., cfg)
-    lines = ['🔔 НОВЫЙ СИГНАЛ · ПРЕДВАРИТЕЛЬНЫЙ',
-             f'{"🟢" if pending["side"] == "LONG" else "🔴"} {symbol} · {pending["side"]} · {tf}',
-             '🧪 Binance Spot · ориентиры для ручной проверки', '']
-    lines += level_lines(pending['reference'], preview.stop, preview.tp1, preview.tp2)
-    lines += ['', f'⏳ Проверка учебного входа: {stamp(pending["entry_ts"])}',
-              '📋 Нажми на число, чтобы скопировать; можно переслать это сообщение в «Избранное».',
-              'Уровни предварительные. Вход может отмениться; точные уровни придут после расчёта исполнения.',
-              'Перед фьючерсным входом сверь цены с контрактом.']
+    preview = make_setup_position(symbol, pending, pending['reference'], pending['entry_ts'], 1., cfg)
+    lines = ['🔔 НОВЫЙ СИГНАЛ', symbol+' · '+SIDES[pending['side']],
+             'Предварительные уровни · цены Binance Spot', '']
+    lines += level_lines(preview.entry, preview.stop, preview.tp1, preview.tp2)
+    lines += ['', 'Почему: часовой тренд, откат на 15 минутах и подтверждение на 5 минутах.',
+              f'Учебный вход назначен на {stamp(pending["entry_ts"])}',
+              'Если цена уйдёт далеко, вход отменится. Итоговые уровни будут после расчёта исполнения.',
+              'Перед ручным входом проверь цену фьючерса.']
     return '\n'.join(lines)
 
 def button(text, action):
@@ -426,18 +475,18 @@ def panel_keyboard(action='MENU', page=0, pages=1, state=None):
         period=action[len(prefix):]
         rows += [[button(('✓ ' if period==p else '')+name,prefix+p) for p,name in [('TODAY','Сегодня'),('7D','7 дней'),('30D','30 дней')]],
                  [button('Всё время',prefix+'ALL'),button('Подробности' if prefix=='AN_' else 'Итоги',('DETAILS_' if prefix=='AN_' else 'AN_')+period)],
-                 [button('📥 Скачать сделки · CSV','EXPORT_CSV')]]
+                 [button('📥 Скачать сделки · CSV','EXPORT_CSV')],
+                 [button('📐 Проверка на истории','CHECK')]]
     elif action=='CONTROLS':
         rows += [[button('⏸ Остановить поиск' if state.get('enabled',True) else '▶️ Включить поиск',
                          'SIGNALS_OFF' if state.get('enabled',True) else 'SIGNALS_ON')],
-                 [button('⏸ Выключить 15m' if state.get('scalp_enabled',True) else '▶️ Включить 15m',
-                         'SCALP_OFF' if state.get('scalp_enabled',True) else 'SCALP_ON')],
                  [button('🛡 Защита','RISK')]]
     elif action=='MENU':
-        rows += [[button('📌 Сделки и уровни','SHOW_LIVE_TRADES'),button('📊 Результаты','AN_ALL')],
-                 [button('🔎 Нет сигналов?','SHOW_REJECTS'),button('📚 История','SHOW_HISTORY')],
-                 [button('📡 Статус','STATUS'),button('⚙️ Управление','CONTROLS')],
-                 [button('❓ Помощь','HELP'),button('🛡 Защита','RISK')]]
+        rows += [[button('📌 Сделки','SHOW_LIVE_TRADES'),button('📊 Результаты','AN_ALL')],
+                 [button('🔭 Что ждём','SHOW_REJECTS'),button('📚 История','SHOW_HISTORY')],
+                 [button('📡 Связь','STATUS'),button('⚙️ Управление','CONTROLS')],
+                 [button('📘 Как выбираем','STRATEGY'),button('🛡 Риск','RISK')],
+                 [button('❓ Помощь','HELP')]]
     if action!='MENU': rows.append([button('🏠 Главная','MENU'),button('🔄 Обновить',f'PAGE|{action}|{page}')])
     else: rows.append([button('🔄 Обновить','MENU')])
     return {'inline_keyboard':rows}
@@ -452,9 +501,19 @@ import pandas as pd
 
 LOG = logging.getLogger('paper_bot')
 MINUTE = 60_000
-TF_MS = {'15m': 15 * MINUTE, '1h': 60 * MINUTE, '4h': 240 * MINUTE}
+TF_MS = {'5m': 5 * MINUTE, '15m': 15 * MINUTE, '1h': 60 * MINUTE, '4h': 240 * MINUTE}
+STRATEGY_TFS = ('1h', '15m', '5m')
 SYMBOLS = ('BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
            'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT')
+# A known crypto-only pool excludes stablecoins, leveraged tokens and tokenized
+# stocks. Rank eligible members by today's public spot volume, not by returns.
+CRYPTO_POOL = frozenset(base+'USDT' for base in (
+    'BTC ETH SOL BNB XRP DOGE ADA AVAX DOT LINK LTC BCH NEAR UNI AAVE SUI HYPE '
+    'ZEC TRX TON XLM HBAR ICP FIL ATOM APT ARB OP INJ SEI TIA WLD ENA ONDO '
+    'ZRO RENDER TAO FET PEPE SHIB BONK WIF FLOKI CRV LDO PENDLE JUP JTO '
+    'PYTH RUNE ETC ALGO VET SAND GALA AXS IMX GRT STX AR MKR COMP DYDX '
+    'SNX FTM POL ENS QNT KAS BERA IP TRUMP PENGU MORPHO EIGEN'
+).split())
 FEATURES = ('body_atr', 'range_atr', 'volume_ratio', 'ema_distance', 'rsi_scaled')
 
 
@@ -471,8 +530,8 @@ class Config:
     daily_loss_limit: float = 0.02
     drawdown_limit: float = 0.08
     loss_streak_limit: int = 3
-    # Scenario assumptions, not a claim about the user's actual exchange tier.
-    fee_bps: float = 10.0
+    # Futures fee scenario (Bybit VIP0 taker base rate), not the user's verified tariff.
+    fee_bps: float = 5.5
     slippage_bps: float = 2.0
     max_spread_bps: float = 10.0
     stop_atr: float = 1.5
@@ -487,6 +546,16 @@ class Config:
     min_neighbor_mean_r: float = 0.10
     min_neighbor_win_fraction: float = 0.55
     max_entry_gap_atr: float = 0.25
+    strategy_id: str = STRATEGY_ID
+    universe_size: int = 25
+    min_quote_volume: float = 10_000_000.0
+    feature_history: int = 350
+    target_r: float = 2.0
+    max_cost_fraction: float = 0.25
+    stop_buffer_atr: float = 0.15
+    correlated_risk_cap: float = 0.0035
+    correlation_threshold: float = 0.75
+    signal_lifetime_ms: int = 90_000
 
     def __post_init__(self):
         if self.market not in ('spot', 'usdm', 'spot_proxy'):
@@ -517,6 +586,13 @@ class Config:
             raise ValueError('Counts must be positive')
         if self.warmup < 210 or self.history_limit < self.warmup + self.horizon * self.neighbors:
             raise ValueError('Not enough history for non-overlapping KNN outcomes')
+        if not 5 <= self.universe_size <= 30 or self.feature_history < 250:
+            raise ValueError('Invalid universe/history size')
+        if not 0 < self.correlated_risk_cap <= self.max_total_risk:
+            raise ValueError('Invalid correlated risk budget')
+        for name in ('target_r', 'max_cost_fraction', 'stop_buffer_atr', 'min_quote_volume'):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'Invalid {name}')
 
     @classmethod
     def from_env(cls):
@@ -570,6 +646,7 @@ def build_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     close = d.close
     d['ema200'] = close.ewm(span=200, adjust=False).mean()
     d['ema50'] = close.ewm(span=50, adjust=False).mean()
+    d['ema20'] = close.ewm(span=20, adjust=False).mean()
     delta = close.diff()
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
@@ -635,6 +712,11 @@ class Position:
     exit_reason: str | None = None
     ambiguous_bars: int = 0
     fills: list = field(default_factory=list)
+    exit_mode: str = 'partial'
+    strategy_id: str = 'legacy'
+    setup_id: str = ''
+    signal_features: dict = field(default_factory=dict)
+    neighbor_score: dict = field(default_factory=dict)
 
     @property
     def net_pnl(self):
@@ -719,6 +801,13 @@ def step_position(p: Position, bar: dict, funding: list | None = None):
         # A stop gapped at open fills at the worse open, never magically at stop.
         raw = min(o, p.stop) if sign == 1 else max(o, p.stop)
         exit_fill(p, raw, p.remaining, end, 'BE' if p.tp1_hit else 'SL')
+        return
+    if p.exit_mode == 'single':
+        if target_hit:
+            p.tp1_hit = True
+            exit_fill(p, p.tp1, p.remaining, end, 'TP')
+        elif end >= p.deadline:
+            exit_fill(p, c, p.remaining, end, 'TIMEOUT')
         return
     if not p.tp1_hit and target_hit:
         exit_fill(p, p.tp1, p.qty * p.partial_fraction, end, 'TP1')
@@ -814,15 +903,177 @@ def predict_knn(df, current_idx, tf, cfg: Config):
             'neighbor_win_fraction': wins, 'neighbors': len(scores)}, ''
 
 
+def confirmed_swings(frame, kind, width=2):
+    """A pivot is usable only after `width` candles on its right have CLOSED."""
+    values = frame[kind].to_numpy(dtype=float)
+    result = []
+    for i in range(width, len(values)-width):
+        window = values[i-width:i+width+1]
+        extreme = window.max() if kind == 'high' else window.min()
+        if values[i] == extreme and np.count_nonzero(window == extreme) == 1:
+            result.append((i, float(values[i])))
+    return result
+
+
+def evaluate_setup(frames, asof, cfg):
+    """Pure, causal 1h → 15m → 5m decision. All inputs are trimmed BEFORE features.
+
+    Returns signal, first rejection, and a human-readable dashboard stage.
+    Thresholds are research hypotheses, not optimized performance claims.
+    """
+    context = {'stage': 0, 'side': '', 'at': int(asof)}
+    data = {}
+    for tf in STRATEGY_TFS:
+        raw = frames[tf].loc[frames[tf].close_ts <= asof].copy().reset_index(drop=True)
+        expected = ((asof+1)//TF_MS[tf])*TF_MS[tf]-1
+        if raw.empty or int(raw.iloc[-1].close_ts) != expected:
+            raise ValueError(f'Stale {tf} candles')
+        validate_bars(raw, TF_MS[tf])
+        if len(raw) < (250 if tf == '1h' else 80):
+            return None, 'insufficient_history', context
+        data[tf] = build_feature_frame(raw)
+    hour, pull, entry = (data[tf] for tf in STRATEGY_TFS)
+    h, p, e = hour.iloc[-1], pull.iloc[-1], entry.iloc[-1]
+    if not all(math.isfinite(float(x)) and x > 0 for x in (h.atr, p.atr, e.atr)):
+        return None, 'insufficient_history', context
+    slope = h.ema50 - hour.iloc[-4].ema50
+    if h.close > h.ema200 and h.ema50 > h.ema200 and slope > .05*h.atr:
+        side, sign = 'LONG', 1
+    elif h.close < h.ema200 and h.ema50 < h.ema200 and slope < -.05*h.atr:
+        side, sign = 'SHORT', -1
+    else:
+        return None, 'trend_unclear', context
+    context.update(stage=1, side=side)
+
+    # A recent touch of the EMA20–50 zone must follow a visible impulse.
+    # The setup identity uses the impulse candle, so repeated touches of the
+    # same pullback cannot create an unlimited series of entry attempts.
+    touches = []
+    for i in range(len(pull)-6, len(pull)):
+        row = pull.iloc[i]
+        lower, upper = min(row.ema20, row.ema50), max(row.ema20, row.ema50)
+        if row.low <= upper + .15*row.atr and row.high >= lower - .15*row.atr:
+            before = pull.iloc[max(0, i-12):i]
+            peak_idx = int(before.high.idxmax() if sign == 1 else before.low.idxmin())
+            peak = pull.iloc[peak_idx]
+            extension = peak.high-max(peak.ema20, peak.ema50) if sign == 1 else min(peak.ema20, peak.ema50)-peak.low
+            if extension >= .8*peak.atr and peak_idx < i:
+                touches.append((i, peak_idx))
+    if not touches:
+        return None, 'pullback_wait', context
+    touch_idx, peak_idx = touches[-1]
+    touch = pull.iloc[touch_idx]
+    # Use only pivots that were already confirmed before the impulse.
+    structure = confirmed_swings(pull.iloc[max(0, peak_idx-48):peak_idx+1], 'low' if sign == 1 else 'high')
+    if not structure:
+        return None, 'pullback_wait', context
+    structure_price = structure[-1][1]
+    retracement = pull.iloc[peak_idx+1:]
+    extreme = float(retracement.low.min() if sign == 1 else retracement.high.max())
+    if sign*(extreme-structure_price) <= 0:
+        return None, 'structure_broken', context
+    context.update(stage=2, pullback_at=int(touch.close_ts))
+    trigger = float(entry.iloc[-4:-1].high.max() if sign == 1 else entry.iloc[-4:-1].low.min())
+    if e.ts <= touch.close_ts or sign*(e.close-trigger) <= 0 or sign*(e.close-e.open) <= 0:
+        return None, 'trigger_wait', context
+    if e.high-e.low > 3*e.atr or sign*(e.close-trigger) > 1.5*e.atr:
+        return None, 'move_too_large', context
+    context['stage'] = 3
+    after_touch = entry.loc[entry.ts > touch.close_ts]
+    extreme = min(extreme, float(after_touch.low.min())) if sign == 1 else max(extreme, float(after_touch.high.max()))
+    stop = extreme - sign*cfg.stop_buffer_atr*p.atr
+    reference = float(e.close)
+    distance = sign*(reference-stop)
+    if not .5*e.atr <= distance <= 4*p.atr or stop <= 0:
+        return None, 'stop_distance', context
+    # Confirmed resistance/support is known at the signal time; never use a
+    # future pivot to filter an otherwise losing historical trade.
+    obstacles = [value for _, value in confirmed_swings(pull.tail(96).reset_index(drop=True), 'high' if sign == 1 else 'low')
+                 if sign*(value-reference) > .1*e.atr]
+    obstacle = min(obstacles) if sign == 1 and obstacles else max(obstacles) if obstacles else None
+    features = {key: float(e[key]) for key in FEATURES}
+    if not all(math.isfinite(value) for value in features.values()):
+        return None, 'insufficient_history', context
+    signal = dict(side=side, atr=float(e.atr), reference=reference, stop=float(stop),
+                  obstacle=obstacle, obstacle_buffer=float(.1*e.atr), signal_ts=int(e.close_ts),
+                  setup_id=f'{side}:{int(pull.iloc[peak_idx].ts)}', strategy_id=cfg.strategy_id,
+                  signal_features=features, neighbor_score={},
+                  explanation='Часовой тренд · откат к средним ценам · пробой трёх свечей на 5 минутах')
+    try:
+        make_setup_position('PREVIEW', signal, reference, int(asof)+1, 1., cfg)
+    except ValueError as error:
+        return None, str(error), context
+    return signal, '', context
+
+
+def make_setup_position(symbol, setup, raw_open, ts, qty, cfg):
+    sign = direction(setup['side'])
+    stop = float(setup['stop'])
+    if any(not math.isfinite(x) or x <= 0 for x in (raw_open, stop, qty)):
+        raise ValueError('stop_distance')
+    slip, fee = cfg.slippage_bps/10000, cfg.fee_bps/10000
+    entry = raw_open*(1+sign*slip)
+    distance = sign*(entry-stop)
+    if distance <= 0 or distance < .5*setup['atr']:
+        raise ValueError('stop_distance')
+    target = entry+sign*cfg.target_r*distance
+    if target <= 0:
+        raise ValueError('stop_distance')
+    cost = (entry+stop)*fee + stop*slip + raw_open*slip
+    if cost > cfg.max_cost_fraction*distance:
+        raise ValueError('costs_too_high')
+    obstacle = setup.get('obstacle')
+    if obstacle is not None and sign*(obstacle-target) < setup.get('obstacle_buffer', 0.):
+        raise ValueError('target_obstacle')
+    slipped_stop = stop*(1-sign*slip)
+    risk_unit = sign*(entry-slipped_stop)+fee*(entry+slipped_stop)
+    p = Position(str(uuid.uuid4()), symbol, '5m', setup['side'], int(ts), entry, qty, qty,
+                 stop, stop, target, target, int(ts+cfg.horizon*TF_MS['5m']-1),
+                 qty*risk_unit, fee, slip, 0., mark=raw_open, funding_through=int(ts), fees=entry*qty*fee,
+                 exit_mode='single', strategy_id=cfg.strategy_id, setup_id=setup.get('setup_id', ''),
+                 signal_features=setup.get('signal_features', {}), neighbor_score=setup.get('neighbor_score', {}))
+    p.fills.append({'kind': 'ENTRY', 'ts': int(ts), 'price': entry, 'qty': qty,
+                    'fee': p.fees, 'model': 'scheduled_next_minute_open_adverse_slippage'})
+    return p
+
+
+def neighbor_diagnostic(trades, query, side, asof, neighbors=15):
+    """Descriptive KNN on completed NEW-strategy trades. NEVER an entry veto.
+
+    Overlapping outcomes are omitted to avoid counting a market-wide move many
+    times. It is not a calibrated probability and starts empty on a new ledger.
+    """
+    eligible = [t for t in trades if t.get('strategy_id') == STRATEGY_ID and t['side'] == side
+                and t['exit_ts'] < asof and all(k in t.get('signal_features', {}) for k in FEATURES)]
+    if len(eligible) < neighbors:
+        return {'samples': 0, 'available': len(eligible)}
+    x = np.array([[t['signal_features'][k] for k in FEATURES] for t in eligible])
+    q = np.array([query[k] for k in FEATURES])
+    scale = np.maximum(np.percentile(x, 75, axis=0)-np.percentile(x, 25, axis=0), 1e-6)
+    distances = np.linalg.norm((x-q)/scale, axis=1)
+    chosen = []
+    for index in np.argsort(distances, kind='stable'):
+        trade = eligible[int(index)]
+        if all(trade['exit_ts'] < t['entry_ts'] or trade['entry_ts'] > t['exit_ts'] for t in chosen):
+            chosen.append(trade)
+            if len(chosen) == neighbors:
+                return {'samples': len(chosen), 'available': len(eligible),
+                        'mean_r': float(np.mean([t['net_r'] for t in chosen])),
+                        'win_fraction': sum(t['net_pnl'] > 0 for t in chosen)/len(chosen)}
+    return {'samples': 0, 'available': len(eligible)}
+
+
 def new_state(cfg: Config):
-    return {'schema': 2, 'config': dataclasses.asdict(cfg), 'balance': cfg.initial_equity,
+    return {'schema': 3, 'config': dataclasses.asdict(cfg), 'balance': cfg.initial_equity,
             'positions': {}, 'pending': {}, 'last_scanned': {}, 'rejects': {},
             'evaluated': {}, 'cooldowns': {}, 'streaks': {}, 'tf_pause_until': {},
             'day': None, 'day_start_equity': cfg.initial_equity, 'day_paused': False,
             'peak_equity': cfg.initial_equity, 'max_drawdown': 0.0,
             'dd_paused': False, 'enabled': True, 'scalp_enabled': True,
             'closed_count': 0, 'realized_net': 0.0, 'last_update_id': 0, 'panel_messages': {}, 'scheduled': {},
-            'data_issues': {}, 'last_evaluation': {}, 'created_at': int(time.time()*1000)}
+            'data_issues': {}, 'last_evaluation': {}, 'created_at': int(time.time()*1000),
+            'used_setups': {}, 'universe': [], 'universe_at': 0, 'candidates': {},
+            'archive_accounts': [], 'scan_cycles': 0, 'last_scan_close': 0}
 
 
 def account_equity(state):
@@ -863,9 +1114,12 @@ def portfolio_gate(state, symbol, tf, side, now_ms, cfg):
     positions = list(state['positions'].values())
     if any(p['symbol'] == symbol for p in positions):
         return 'symbol_already_open'
-    if len(positions) >= cfg.max_positions:
+    pending = list(state['pending'].values())
+    if any(p['symbol'] == symbol for p in pending):
+        return 'symbol_pending'
+    if len(positions) + len(pending) >= cfg.max_positions:
         return 'position_limit'
-    if sum(p['side'] == side for p in positions) >= cfg.max_same_direction:
+    if sum(p['side'] == side for p in positions+pending) >= cfg.max_same_direction:
         return 'direction_limit'
     return ''
 
@@ -878,18 +1132,32 @@ def open_paper_position(state, pending, bar, cfg):
         return None, reason
     if abs(float(bar['open']) - pending['reference']) > cfg.max_entry_gap_atr * pending['atr']:
         return None, 'entry_gap'
-    unit = make_position(symbol, tf, side, float(bar['open']), pending['atr'], ts, 1.0, cfg)
+    factory = (lambda qty: make_setup_position(symbol, pending, float(bar['open']), ts, qty, cfg)) if 'stop' in pending else (
+        lambda qty: make_position(symbol, tf, side, float(bar['open']), pending['atr'], ts, qty, cfg))
+    try:
+        unit = factory(1.)
+    except ValueError as error:
+        return None, str(error)
     equity = account_equity(state)
     used_risk = sum(p['planned_risk'] for p in state['positions'].values())
     used_notional = sum(p['remaining'] * p['mark'] for p in state['positions'].values())
-    budget = min(equity * cfg.risk_fraction, equity * cfg.max_total_risk - used_risk)
-    notional = min(equity * cfg.max_position_notional, equity * cfg.max_gross_notional - used_notional)
+    reserved_risk = sum(p.get('reserved_risk', 0.) for p in state['pending'].values())
+    reserved_notional = sum(p.get('reserved_notional', 0.) for p in state['pending'].values())
+    budget = min(equity * cfg.risk_fraction, equity * cfg.max_total_risk - used_risk - reserved_risk)
+    notional = min(equity * cfg.max_position_notional, equity * cfg.max_gross_notional - used_notional - reserved_notional)
+    if pending.get('strategy_id') == cfg.strategy_id:
+        related = pending.get('related_symbols', [])
+        risk = sum(p['planned_risk'] for p in state['positions'].values() if p['symbol'] in related)
+        risk += sum(p.get('reserved_risk', 0.) for p in state['pending'].values() if p['symbol'] in related)
+        budget = min(budget, equity*cfg.correlated_risk_cap-risk)
+        if budget <= 0:
+            return None, 'correlated_budget'
     if budget <= 0 or notional <= 0:
         return None, 'portfolio_budget'
     qty = min(budget / unit.planned_risk, notional / unit.entry)
     if qty * unit.entry < 10:  # paper-only dust floor, not an exchange filter
         return None, 'position_too_small'
-    p = make_position(symbol, tf, side, float(bar['open']), pending['atr'], ts, qty, cfg)
+    p = factory(qty)
     state['balance'] -= p.fees
     state['positions'][p.id] = dataclasses.asdict(p)
     return p, ''
@@ -939,7 +1207,7 @@ class Store:
         self.db.execute('INSERT OR IGNORE INTO state VALUES (1, ?)', (json.dumps(new_state(cfg)),))
         self.db.commit()
         saved = self.snapshot()
-        if saved.get('schema') != 2 or saved['config'] != dataclasses.asdict(cfg):
+        if saved.get('schema') != 3 or saved['config'] != dataclasses.asdict(cfg):
             self.db.close()
             raise ValueError('Config differs from database. Use a NEW DATA_DIR for a new experiment.')
 
@@ -987,10 +1255,30 @@ def read_saved_state(path):
 
 
 def open_signal_store(data_dir, cfg):
-    """Separate research account; never mix spot proxy results with futures fills."""
+    """Separate strategy ledger; leave old databases intact and reuse menu IDs."""
     if cfg.market != 'spot_proxy':
         raise ValueError('This scanner requires the spot_proxy research profile')
-    return Store(Path(data_dir) / 'paper_spot_signals.sqlite3', cfg)
+    path = Path(data_dir) / 'paper_pullback_v3.sqlite3'
+    first_start = not path.exists()
+    store = Store(path, cfg)
+    if first_start:
+        archives, legacy = [], None
+        for name in ('paper_spot_signals.sqlite3', 'paper_futures.sqlite3', 'paper.sqlite3'):
+            old = Path(data_dir) / name
+            if old.exists():
+                saved = read_saved_state(old)
+                archives.append({'file': name, 'closed_count': saved.get('closed_count', 0),
+                                 'open_count': len(saved.get('positions', {}))})
+                if legacy is None:
+                    legacy = saved
+        def migrate(s):
+            s['archive_accounts'] = archives
+            if legacy:
+                for key in ('panel_messages', 'last_update_id', 'enabled'):
+                    s[key] = legacy.get(key, s[key])
+            return None, []
+        store.transact(migrate)
+    return store
 
 
 class MarketClient:
@@ -1001,12 +1289,14 @@ class MarketClient:
         self.frames = {}
         self.clock_offset = 0
         self.clock_checked = 0
+        self.universe_checked = 0
+        self.universe_symbols = []
 
     def get(self, path, **params):
         url = self.base + path + '?' + urllib.parse.urlencode(params)
         for attempt in range(3):
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'PaperSignalBot/2'})
+                req = urllib.request.Request(url, headers={'User-Agent': 'PaperSignalBot/3'})
                 with urllib.request.urlopen(req, timeout=15) as response:
                     return json.load(response)
             except urllib.error.HTTPError as error:
@@ -1072,7 +1362,11 @@ class MarketClient:
             if old.empty:
                 del self.frames[key]
                 return self.history(symbol, tf, now, limit)
-            fresh = self.klines_range(symbol, tf, int(old.iloc[-1].ts) + TF_MS[tf], now - 1)
+            start = int(old.iloc[-1].ts) + TF_MS[tf]
+            if start + TF_MS[tf] > now:
+                validate_bars(old, TF_MS[tf])
+                return old
+            fresh = self.klines_range(symbol, tf, start, now - 1)
             if not fresh.empty:
                 self.frames[key] = pd.concat([old, fresh], ignore_index=True).drop_duplicates('ts').tail(limit).reset_index(drop=True)
         result = self.frames[key]
@@ -1085,6 +1379,44 @@ class MarketClient:
         if not all(math.isfinite(x) for x in (bid, ask)) or not 0 < bid <= ask:
             raise ValueError('Invalid spread quote')
         return 10000 * (ask - bid) / ((ask + bid) / 2)
+
+    def liquid_universe(self, cfg):
+        """Hourly refresh from present public spot listings, volume and spread.
+
+        This selection is for LIVE scanning only. A historical test must choose
+        its symbols using information that was available in that period.
+        """
+        if self.universe_symbols and time.monotonic()-self.universe_checked < 3600:
+            return self.universe_symbols
+        listings = self.get(self.prefix+'/exchangeInfo')['symbols']
+        excluded = {'USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'EUR', 'EURC', 'USD1', 'USDE',
+                    'PAXG', 'XAUT', 'WBTC', 'WBETH', 'WETH', 'BETH'}
+        allowed = {r['symbol'] for r in listings if r.get('status') == 'TRADING'
+                   and r['symbol'] in CRYPTO_POOL
+                   and r.get('quoteAsset') == 'USDT' and r.get('isSpotTradingAllowed', False)
+                   and r.get('baseAsset') not in excluded
+                   and not r.get('baseAsset', '').endswith(('UP', 'DOWN', 'BULL', 'BEAR'))}
+        quotes = {r['symbol']: r for r in self.get(self.prefix+'/ticker/bookTicker')}
+        ranked = []
+        for row in self.get(self.prefix+'/ticker/24hr'):
+            symbol = row['symbol']
+            if symbol not in allowed or symbol not in quotes:
+                continue
+            volume = float(row['quoteVolume'])
+            bid, ask = float(quotes[symbol]['bidPrice']), float(quotes[symbol]['askPrice'])
+            if not all(math.isfinite(x) for x in (volume, bid, ask)) or not 0 < bid <= ask:
+                continue
+            if volume >= cfg.min_quote_volume and 20000*(ask-bid)/(ask+bid) <= cfg.max_spread_bps:
+                ranked.append((volume, symbol))
+        ranked.sort(reverse=True)
+        if not ranked:
+            raise ValueError('No eligible liquid markets; do not silently trade a fallback list')
+        self.universe_symbols = [symbol for _, symbol in ranked[:cfg.universe_size]]
+        self.universe_checked = time.monotonic()
+        # Bound memory if the daily liquidity ranking changes repeatedly.
+        keep = set(self.universe_symbols)
+        self.frames = {key: frame for key, frame in self.frames.items() if key[0] in keep}
+        return self.universe_symbols
 
     def funding(self, symbol, start, end):
         if self.market in ('spot', 'spot_proxy'):
@@ -1185,15 +1517,12 @@ class Telegram:
         for i, chunk in enumerate(chunks):
             data = {'chat_id': chat, 'text': panel_html(chunk), 'parse_mode': 'HTML'}
             if i == len(chunks)-1:
-                matches = re.findall(r'^(?:🎯 Вход|🛑 Стоп-лосс|🥇 Тейк-профит 1|🥈 Тейк-профит 2): `([0-9.]+)`', message, re.M)
-                if len(matches) == 4:
-                    ticket = '\n'.join([message.splitlines()[1],
-                                        'Вход: '+matches[0], 'SL: '+matches[1],
-                                        'TP1: '+matches[2], 'TP2: '+matches[3]])
+                matches = re.findall(r'^(?:Вход|Стоп|Цель): `([0-9.]+)`', message, re.M)
+                if len(matches) == 3:
+                    ticket = message.splitlines()[1]+'\nВход: '+matches[0]+'\nСтоп: '+matches[1]+'\nЦель: '+matches[2]
                     data['reply_markup'] = {'inline_keyboard': [
                         [copy_button('📋 Вход', matches[0]), copy_button('📋 Стоп', matches[1])],
-                        [copy_button('📋 TP1', matches[2]), copy_button('📋 TP2', matches[3])],
-                        [copy_button('📋 Все уровни', ticket)]]}
+                        [copy_button('📋 Цель', matches[2]), copy_button('📋 Все уровни', ticket)]]}
                 elif menu:
                     data['reply_markup'] = keyboard()
             self.call('sendMessage', data)
@@ -1236,25 +1565,20 @@ def market_error_text(error):
 
 
 def entry_message(p):
-    lines = ['✅ УЧЕБНЫЙ ВХОД РАССЧИТАН', f'{"🟢" if p.side == "LONG" else "🔴"} {p.symbol} · {p.side} · {p.tf}',
-             '🧪 Binance Spot · ордер на биржу не отправлялся', '']
+    lines = ['✅ УЧЕБНЫЙ ВХОД РАССЧИТАН', p.symbol+' · '+SIDES[p.side], '']
     lines += level_lines(p.entry, p.stop, p.tp1, p.tp2)
-    lines += ['', f'🥇 TP1 → закрыть {100*p.partial_fraction:g}% · TP2 → остаток',
-              f'🛡 Планируемый риск: {p.planned_risk:.2f} USDT',
-              f'📦 Расчётный объём: {p.qty:.8g}', f'🕒 Вход: {stamp(p.entry_ts)}', '',
-              '📋 Нажми на число или используй кнопки копирования ниже.',
-              'Можно переслать сообщение в «Избранное». Цены фьючерса сверяй отдельно.',
-              'Исполнение рассчитано после закрытия минуты; это не мгновенная цена рынка.']
+    lines += ['', 'Одна цель · закрытие всей сделки', f'Планируемый риск: {p.planned_risk:.2f} USDT',
+              f'Расчётный объём: {p.qty:.8g}', 'Время входа: '+stamp(p.entry_ts), '',
+              'Расчёт сделан после завершения минуты. Это не текущая цена.',
+              'Цены Binance Spot; перед ручным входом сверь фьючерс. Ордера не отправлялись.']
     return '\n'.join(lines)
 
 def closed_message(t):
-    return '\n'.join(['🏁 СДЕЛКА ЗАВЕРШЕНА',
-        f'{"🟢" if t["side"] == "LONG" else "🔴"} {t["symbol"]} · {t["side"]} · {t["tf"]}', '',
-        f'{"💚" if t["net_pnl"] >= 0 else "🔴"} Итог: {t["net_pnl"]:+.2f} USDT',
-        '🚪 Выход: '+EXITS.get(t['exit_reason'], 'другое условие'),
-        f'🥇 Первая цель: {"достигнута ✅" if t["tp1_hit"] else "не достигнута"}',
-        f'🕒 Закрытие: {stamp(t["exit_ts"])}', '',
-        '🧪 Учебный итог по споту. Комиссии и частичные закрытия включены; фьючерсные платежи не учтены.'])
+    return '\n'.join(['🏁 СДЕЛКА ЗАВЕРШЕНА', t['symbol']+' · '+SIDES[t['side']], '',
+        f'Итог после расходов: {t["net_pnl"]:+.2f} USDT',
+        'Причина: '+EXITS.get(t['exit_reason'], 'другое условие'),
+        'Закрытие: '+stamp(t['exit_ts']), '',
+        'Учебный результат по споту. Фьючерсные платежи не учтены.'])
 
 class Runtime:
     def __init__(self, store, cfg, client=None, telegram=None):
@@ -1336,98 +1660,150 @@ class Runtime:
             return None, []
         self.store.transact(apply)
 
-    def scan_one(self, symbol, tf, now):
+    def related_symbols(self, symbol, side, asof):
+        state = self.store.snapshot()
+        related = []
+        own = self.client.frames.get((symbol, '1h'), pd.DataFrame())
+        for held in list(state['positions'].values())+list(state['pending'].values()):
+            other = self.client.frames.get((held['symbol'], '1h'), pd.DataFrame())
+            same_side = side == held['side']
+            correlated = same_side  # Conservative fallback when covariance is unknown.
+            if not own.empty and not other.empty:
+                a = own.loc[own.close_ts <= asof].set_index('ts').close.pct_change().tail(96)
+                b = other.loc[other.close_ts <= asof].set_index('ts').close.pct_change().tail(96)
+                pair = pd.concat([a, b], axis=1).dropna()
+                if len(pair) >= 48 and (pair.std() > 1e-12).all():
+                    rho = float(pair.iloc[:, 0].corr(pair.iloc[:, 1]))
+                    if math.isfinite(rho):
+                        correlated = rho*direction(side)*direction(held['side']) >= self.cfg.correlation_threshold
+            if correlated:
+                related.append(held['symbol'])
+        return related
+
+    def fetch_setup_frames(self, symbol, now):
+        return {tf: self.client.history(symbol, tf, now, self.cfg.feature_history) for tf in STRATEGY_TFS}
+
+    def scan_one(self, symbol, tf, now, frames=None):
+        tf = '5m'  # One strategy; the other frames provide context, not extra entries.
         state = self.store.snapshot()
         key = f'{symbol}_{tf}'
-        latest_close = (now // TF_MS[tf])*TF_MS[tf]-1
-        if state['last_scanned'].get(key,-1)>=latest_close:
+        latest_close = (now//TF_MS[tf])*TF_MS[tf]-1
+        if state['last_scanned'].get(key, -1) >= latest_close or not state['enabled']:
             return
-        if not state['enabled'] or (tf=='15m' and not state['scalp_enabled']):
+        if now-latest_close > self.cfg.signal_lifetime_ms:
             return
-        if now-latest_close>2*MINUTE:
-            return  # Wait for a fresh closed candle; never backdate a new signal.
-        self.activity = f'Проверяю {symbol} · {MODES[tf]}'
-        raw = self.client.history(symbol,tf,now,self.cfg.history_limit)
-        if raw.empty or int(raw.iloc[-1].close_ts)!=latest_close:
-            self.record_data_issue(symbol,tf,'Биржа ещё не вернула свежие завершённые данные')
-            return
-        df = build_feature_frame(raw)
-        signal, reason = predict_knn(df,len(df)-1,tf,self.cfg)
-        if signal and self.client.spread_bps(symbol)>self.cfg.max_spread_bps:
-            signal, reason = None,'spread'
+        self.activity = f'Проверяю {symbol}: направление → откат → вход'
+        frames = frames if frames is not None else self.fetch_setup_frames(symbol, now)
+        signal, reason, context = evaluate_setup(frames, latest_close, self.cfg)
+        if signal and self.client.spread_bps(symbol) > self.cfg.max_spread_bps:
+            signal, reason = None, 'spread'
+        if signal:
+            signal['neighbor_score'] = neighbor_diagnostic(self.store.trades(), signal['signal_features'],
+                                                          signal['side'], latest_close, self.cfg.neighbors)
+            signal['related_symbols'] = self.related_symbols(symbol, signal['side'], latest_close)
         decision_now = self.client.now_ms()
+
         def decide(s):
-            if s['last_scanned'].get(key,-1)>=latest_close:
-                return None,[]
-            s['last_scanned'][key]=latest_close
-            s['evaluated'][tf]=s['evaluated'].get(tf,0)+1
-            s.setdefault('data_issues',{}).pop(key,None)
+            if s['last_scanned'].get(key, -1) >= latest_close:
+                return None, []
+            s['last_scanned'][key] = latest_close
+            s['evaluated'][tf] = s['evaluated'].get(tf, 0)+1
+            s['data_issues'].pop(key, None)
+            s['candidates'][symbol] = dict(context, at=latest_close)
             why = reason
             if signal:
-                why = portfolio_gate(s,symbol,tf,signal['side'],decision_now,self.cfg)
-                if any(p['symbol']==symbol for p in s['pending'].values()):
-                    why='symbol_pending'
-                if decision_now-latest_close>2*MINUTE:
-                    why='stale_signal'
+                why = portfolio_gate(s, symbol, tf, signal['side'], decision_now, self.cfg)
+                setup_key = symbol+':'+signal['setup_id']
+                if setup_key in s['used_setups']:
+                    why = 'setup_used'
+                if decision_now-latest_close > self.cfg.signal_lifetime_ms:
+                    why = 'stale_signal'
                 if not why:
-                    entry_ts=((decision_now+1000)//MINUTE+1)*MINUTE
-                    s['pending'][key]=dict(signal,symbol=symbol,tf=tf,entry_ts=entry_ts)
-                    s.setdefault('scheduled',{})[tf]=s.get('scheduled',{}).get(tf,0)+1
-                    s.setdefault('last_evaluation',{})[key]={'at':decision_now,'outcome':'scheduled'}
-                    return s['pending'][key],[]
-            reject(s,tf,why or 'no_signal')
-            s.setdefault('last_evaluation',{})[key]={'at':decision_now,'outcome':why or 'no_signal'}
-            return None,[]
-        pending=self.store.transact(decide)
-        evaluation = self.store.snapshot().get('last_evaluation', {}).get(key, {})
-        outcome = evaluation.get('outcome', 'unknown')
-        LOG.info('Signal check %s %s: %s', symbol, tf,
-                 'вход назначен' if outcome == 'scheduled' else REASONS.get(outcome, outcome))
+                    entry_ts = ((decision_now+1000)//MINUTE+1)*MINUTE
+                    pending = dict(signal, symbol=symbol, tf=tf, entry_ts=entry_ts)
+                    # Reserve the same budget the fill engine would use, but never
+                    # open a position until the scheduled minute actually exists.
+                    preview, why = open_paper_position(json.loads(json.dumps(s)), pending,
+                                                       {'ts': entry_ts, 'open': pending['reference']}, self.cfg)
+                    if preview:
+                        pending['reserved_risk'] = preview.planned_risk
+                        pending['reserved_notional'] = preview.qty*preview.entry
+                        s['pending'][key] = pending
+                        s['used_setups'][setup_key] = latest_close
+                        s['used_setups'] = {k:v for k,v in s['used_setups'].items() if v > latest_close-7*86400000}
+                        s['scheduled'][tf] = s['scheduled'].get(tf, 0)+1
+                        s['last_evaluation'][key] = {'at': decision_now, 'outcome': 'scheduled'}
+                        s['candidates'][symbol]['outcome'] = 'scheduled'
+                        return pending, []
+            reject(s, tf, why or 'no_signal')
+            s['last_evaluation'][key] = {'at': decision_now, 'outcome': why or 'no_signal'}
+            s['candidates'][symbol]['outcome'] = why or 'no_signal'
+            return None, []
+        pending = self.store.transact(decide)
+        outcome = self.store.snapshot()['last_evaluation'].get(key, {}).get('outcome', 'unknown')
+        LOG.info('Signal check %s 5m: %s', symbol, outcome)
         if pending:
             self.telegram.notify(signal_message(symbol, tf, pending, self.cfg))
 
     def scan(self, now):
-        for tf in TF_MS:
-            for symbol in SYMBOLS:
+        state = self.store.snapshot()
+        if not state['enabled']:
+            return
+        latest_close = (now//TF_MS['5m'])*TF_MS['5m']-1
+        if now-latest_close > self.cfg.signal_lifetime_ms:
+            return
+        symbols = self.client.liquid_universe(self.cfg)
+        def remember(s):
+            s['universe'], s['universe_at'] = list(symbols), int(now)
+            s['candidates'] = {k:v for k,v in s['candidates'].items() if k in symbols}
+            s['data_issues'] = {k:v for k,v in s['data_issues'].items() if k.rsplit('_', 1)[0] in symbols}
+            return None, []
+        self.store.transact(remember)
+        todo = [symbol for symbol in symbols if state['last_scanned'].get(symbol+'_5m', -1) < latest_close]
+        if not todo:
+            return
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='candles') as pool:
+            jobs = {pool.submit(self.fetch_setup_frames, symbol, now): symbol for symbol in todo}
+            for future in as_completed(jobs):
+                symbol = jobs[future]
                 try:
-                    self.scan_one(symbol,tf,self.client.now_ms())
+                    self.scan_one(symbol, '5m', now, future.result())
                 except Exception as error:
                     message = market_error_text(error)
-                    self.record_data_issue(symbol,tf,message)
-                    LOG.warning('Scan failed for %s %s: %s',symbol,tf,message)
-                    # Exchange-wide restrictions must not trigger 30 immediate retries.
-                    if isinstance(error,urllib.error.HTTPError) and (error.code in (403,418,429,451) or error.code >= 500):
+                    self.record_data_issue(symbol, '5m', message)
+                    LOG.warning('Scan failed %s: %s', symbol, message)
+                    if ((isinstance(error, urllib.error.HTTPError) and error.code in (403, 418, 429, 451))
+                            or isinstance(error, RuntimeError) and 'IP restriction' in str(error)):
+                        for job in jobs:
+                            job.cancel()
                         raise
-                    if isinstance(error,(urllib.error.URLError,TimeoutError)) and not isinstance(error,urllib.error.HTTPError):
-                        raise
-                    if isinstance(error,RuntimeError) and 'IP restriction' in str(error):
-                        raise
+        def finish(s):
+            if s['last_scan_close'] != latest_close and any(v['at'] == latest_close for v in s['candidates'].values()):
+                s['scan_cycles'] += 1
+                s['last_scan_close'] = latest_close
+            return None, []
+        self.store.transact(finish)
+        snapshot = self.store.snapshot()
+        counts = Counter(v.get('outcome', 'waiting') for v in snapshot['candidates'].values() if v['at'] == latest_close)
+        LOG.info('Scan complete candles=%s markets=%s results=%s', latest_close, len(todo), dict(counts))
 
     def warm_one_history(self, now):
-        # Prepare one missing history during idle time, instead of doing all cold
-        # downloads inside the two-minute signal window. Never delay active monitoring.
-        if not hasattr(self.client, 'frames'):
+        # Preload one market between decision windows; no 2,500-candle KNN warmup.
+        if not hasattr(self.client, 'frames') or now % TF_MS['5m'] < self.cfg.signal_lifetime_ms:
+            return
+        if TF_MS['5m']-now % TF_MS['5m'] < 30_000:
             return
         state = self.store.snapshot()
-        if state['positions'] or state['pending'] or not state['enabled']:
+        if not state['enabled']:
             return
-        for tf in TF_MS:
-            if tf == '15m' and not state['scalp_enabled']:
-                continue
-            # Leave a minute before the next close for monitoring and fresh scans.
-            until_close = TF_MS[tf] - now % TF_MS[tf]
-            if now % TF_MS[tf] < 2*MINUTE or until_close < MINUTE:
-                continue
-            for symbol in SYMBOLS:
-                key = (symbol, tf)
-                if key in self.client.frames or self.warm_retry_at.get(key, 0) > time.monotonic():
+        for symbol in self.client.liquid_universe(self.cfg):
+            if any((symbol, tf) not in self.client.frames for tf in STRATEGY_TFS):
+                if self.warm_retry_at.get(symbol, 0) > time.monotonic():
                     continue
-                self.activity = f'Готовлю историю {symbol} · {MODES[tf]}'
-                self.warm_retry_at[key] = time.monotonic() + 300
-                try:
-                    self.client.history(symbol, tf, now, self.cfg.history_limit)
-                except Exception as error:
-                    self.record_data_issue(symbol, tf, market_error_text(error))
+                self.warm_retry_at[symbol] = time.monotonic()+300
+                self.activity = f'Готовлю историю {symbol}'
+                self.fetch_setup_frames(symbol, now)
                 return
 
     def work(self):
@@ -1457,20 +1833,22 @@ class Runtime:
         if action.startswith('DETAILS_') and action[8:] in PERIODS:
             return breakdown(self.store.trades(), action[8:])
         if action == 'STATUS':
-            lines = ['📡 СТАТУС БОТА', f'Версия {BOT_VERSION}',
-                     'Источник свечей: Binance Spot · расчёт сигналов LONG/SHORT', 'Направления: рост и падение во всех трёх режимах', '',
-                     f'Последний завершённый цикл: {stamp(self.last_success*1000)}',
-                     f'Последняя попытка проверки: {stamp(self.last_attempt*1000)}',
-                     'Текущее действие: '+self.activity,
-                     'Ошибка: '+(self.last_error or 'нет'), '',
-                     'ПОСЛЕДНИЕ ПРОВЕРКИ ЦЕН']
-            for tf, name in MODES.items():
-                values = [v['at'] for k,v in s.get('last_evaluation',{}).items() if k.endswith('_'+tf)]
-                lines.append(name+': '+stamp(max(values) if values else 0))
-            lines += ['', f'Проблем с получением данных: {len(s.get("data_issues",{}))}',
-                      'Причины показаны в разделе «Почему нет входа».',
-                      'Новый поиск выполняется после закрытия очередного интервала: 15 минут, 1 час или 4 часа.',
-                      'Сразу после запуска может потребоваться время на загрузку истории.']
+            lines = ['📡 СВЯЗЬ И ОБНОВЛЕНИЯ', f'Версия {BOT_VERSION}', '',
+                     'Источник: публичные свечи Binance Spot', 'Направления: LONG и SHORT',
+                     'Часовой тренд → откат 15м → вход 5м', '',
+                     'Последний цикл: '+stamp(self.last_success*1000),
+                     'Последняя оценка рынка: '+stamp(s.get('last_scan_close', 0)),
+                     'Сейчас: '+self.activity, 'Ошибка: '+(self.last_error or 'нет'),
+                     f'Монет в обзоре: {len(s.get("universe", []))}',
+                     f'Проверок рынка: {s.get("scan_cycles", 0)}', '',
+                     'МОНЕТЫ', ', '.join(s.get('universe', [])) or 'Загружаем список']
+            if s.get('data_issues'):
+                lines += ['', 'ПРОБЛЕМЫ С ДАННЫМИ']
+                for key, value in list(s['data_issues'].items())[:8]:
+                    lines.append(key.replace('_', ' · ')+': '+value['message'])
+            lines += ['', 'Новая стратегия считает результаты отдельно от прежних правил.',
+                      f'Архивов прежних счетов на сервере: {len(s.get("archive_accounts", []))}',
+                      'На бесплатном Render история локальная и может исчезнуть при перезапуске или развёртывании.' if os.getenv('RENDER') and not os.getenv('RENDER_DISK_ID') else 'История хранится в папке DATA_DIR. Для сохранения при замене сервера нужен постоянный диск.']
             return '\n'.join(lines)
         if action in ('SHOW_STATS', 'MENU'):
             return report(self.store, self.cfg)
@@ -1483,6 +1861,10 @@ class Runtime:
             return why_report(s)
         if action == 'SHOW_HISTORY':
             return history_report(self.store.trades())
+        if action == 'STRATEGY':
+            return strategy_report()
+        if action == 'CHECK':
+            return historical_check_report()
         if action == 'HELP':
             return GUIDE
         if action in ('SHOW_AI_MEMORY', 'RISK'):
@@ -1490,11 +1872,11 @@ class Runtime:
         if action == 'CONTROLS':
             return ('⚙️ УПРАВЛЕНИЕ ПОИСКОМ\n\n'
                     f'Поиск новых сделок: {"включён" if s["enabled"] else "выключен"}\n'
-                    f'Быстрые сделки: {"включены" if s["scalp_enabled"] else "выключены"}\n\n'
+                    'Стратегия: направление 1ч → откат 15м → вход 5м\n\n'
                     'Выключение отменяет ожидающие входы. Уже открытые сделки продолжают отслеживаться.\n'
                     'Включение поиска не отменяет защитные паузы после потерь.')
         if action in ('SIGNALS_ON', 'SIGNALS_OFF', 'SCALP_ON', 'SCALP_OFF', 'TOGGLE_SIGNALS', 'TOGGLE_SCALP'):
-            key = 'enabled' if action.startswith('SIGNALS_') or action == 'TOGGLE_SIGNALS' else 'scalp_enabled'
+            key = 'enabled'
             # Explicit on/off prevents a repeated click from reversing the action.
             def change(state):
                 enabled = not state[key] if action.startswith('TOGGLE_') else action.endswith('_ON')
@@ -1510,7 +1892,7 @@ class Runtime:
     def make_panel(self, action, page=0):
         aliases = {'SHOW_STATS':'MENU', 'DETAILS':'DETAILS_ALL', 'SHOW_AI_MEMORY':'RISK'}
         action = aliases.get(action, action)
-        allowed = {'MENU','STATUS','SHOW_LIVE_TRADES','SHOW_REJECTS','SHOW_HISTORY','HELP','RISK','CONTROLS'}
+        allowed = {'MENU','STATUS','SHOW_LIVE_TRADES','SHOW_REJECTS','SHOW_HISTORY','HELP','RISK','CONTROLS','STRATEGY','CHECK'}
         allowed |= {'AN_'+p for p in PERIODS} | {'DETAILS_'+p for p in PERIODS}
         controls = {'SIGNALS_ON','SIGNALS_OFF','SCALP_ON','SCALP_OFF','TOGGLE_SIGNALS','TOGGLE_SCALP'}
         if action.startswith('TRADE|'):
@@ -1651,16 +2033,37 @@ def main():
     try:
         runtime = Runtime(store, cfg)
         started_at = time.time()
-        threading.Thread(target=runtime.work, daemon=True).start()
-        threading.Thread(target=runtime.telegram_work, daemon=True).start()
+        # Render briefly overlaps old and new instances during a rollout. Give
+        # the old poller its drain interval before activating this single bot.
+        delay = float(os.getenv('STARTUP_DELAY_SECONDS', '75' if os.getenv('RENDER') else '0'))
+        def start_worker(target):
+            if delay:
+                runtime.running_wait(delay)
+            if runtime.running.is_set():
+                target()
+        workers = [threading.Thread(target=start_worker, args=(target,), daemon=True)
+                   for target in (runtime.work, runtime.telegram_work)]
+        for worker in workers:
+            worker.start()
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         class Health(BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path not in ('/', '/healthz'):
+                    self.send_error(404)
+                    return
                 fresh = time.time() - runtime.last_success < 180
                 starting = not runtime.last_attempt or (not runtime.last_success and time.time()-started_at < 300 and not runtime.last_error)
+                snapshot = store.snapshot()
+                evaluated = snapshot.get('last_scan_close', 0)
+                data_fresh = bool(evaluated and time.time()*1000-evaluated < 7*MINUTE)
                 body = json.dumps({'mode': 'paper', 'market': cfg.market, 'version': BOT_VERSION, 'healthy': fresh,
                                    'last_success': runtime.last_success,
+                                   'market_data_fresh': data_fresh, 'last_scan_close': evaluated,
+                                   'markets': len(snapshot.get('universe', [])),
+                                   'checks': snapshot['evaluated'].get('5m', 0),
+                                   'fee_bps': cfg.fee_bps,
+                                   'data_issues': len(snapshot.get('data_issues', {})),
                                    'error_type': runtime.last_error}).encode()
                 self.send_response(200 if fresh or starting else 503)
                 self.send_header('Content-Type', 'application/json')
@@ -1671,8 +2074,17 @@ def main():
                 return
 
         server = ThreadingHTTPServer(('0.0.0.0', int(os.getenv('PORT', '10000'))), Health)
-        LOG.info('PAPER ONLY. Market=%s. No exchange orders. Ctrl+C to stop.', cfg.market)
+        import signal
+        def stop_service(signum, frame):
+            runtime.running.clear()
+            threading.Thread(target=server.shutdown, daemon=True).start()
+        signal.signal(signal.SIGTERM, stop_service)
+        signal.signal(signal.SIGINT, stop_service)
+        LOG.info('PAPER ONLY. Version=%s strategy=%s market=%s startup_delay=%s', BOT_VERSION, STRATEGY_ID, cfg.market, delay)
         server.serve_forever()
+        server.server_close()
+        for worker in workers:
+            worker.join(timeout=2)
     finally:
         if runtime:
             runtime.running.clear()
@@ -1681,3 +2093,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

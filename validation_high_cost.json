@@ -1,0 +1,94 @@
+{
+  "trades": 2,
+  "wins": 0,
+  "winrate_pct": 0.0,
+  "net_pnl": -25.122828506672484,
+  "profit_factor": 0.0,
+  "average_r": -0.8025943367535096,
+  "fees": 4.11944644047861,
+  "funding_paid": 0.0,
+  "strategy": "pullback_1h_15m_5m_v1",
+  "version": "3.0.0 · Тренд и откат",
+  "start": "2026-10-24T00:00:00+00:00",
+  "end_exclusive": "2026-10-31T00:00:00+00:00",
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "candles_evaluated": 6048,
+  "signals": 3,
+  "open_at_end": 0,
+  "pending_at_end": 0,
+  "final_equity": 9974.877171493326,
+  "max_observed_drawdown": 0.0029666529334517744,
+  "rejection_counts": {
+    "trigger_wait": 1368,
+    "pullback_wait": 1340,
+    "costs_too_high": 162,
+    "structure_broken": 1370,
+    "move_too_large": 14,
+    "stop_distance": 6,
+    "trend_unclear": 1752,
+    "target_obstacle": 29,
+    "entry_gap": 1,
+    "setup_used": 4
+  },
+  "daily": [
+    {
+      "date": "2026-10-24",
+      "equity": 10000.0,
+      "net_change": 0.0,
+      "closed_count": 0
+    },
+    {
+      "date": "2026-10-25",
+      "equity": 10000.0,
+      "net_change": 0.0,
+      "closed_count": 0
+    },
+    {
+      "date": "2026-10-26",
+      "equity": 9974.8772,
+      "net_change": -25.1228,
+      "closed_count": 2
+    },
+    {
+      "date": "2026-10-27",
+      "equity": 9974.8772,
+      "net_change": 0.0,
+      "closed_count": 2
+    },
+    {
+      "date": "2026-10-28",
+      "equity": 9974.8772,
+      "net_change": 0.0,
+      "closed_count": 2
+    },
+    {
+      "date": "2026-10-29",
+      "equity": 9974.8772,
+      "net_change": 0.0,
+      "closed_count": 2
+    },
+    {
+      "date": "2026-10-30",
+      "equity": 9974.8772,
+      "net_change": 0.0,
+      "closed_count": 2
+    }
+  ],
+  "assumptions": {
+    "fixed_spread_bps": 5.0,
+    "fee_bps": 10.0,
+    "slippage_bps": 2.0,
+    "funding": "not included",
+    "prices": "Binance Spot; not futures",
+    "selection": "fixed symbols chosen before this replay; not current volume ranking",
+    "intrabar": "1m OHLC; stop first if ambiguous; adverse gap fills",
+    "timing": "decision 2s after bar close; scheduled next full minute",
+    "open_positions": "marked to adverse exit price, not forced closed"
+  },
+  "warning": "A short retrospective check, not validated profitability or a walk-forward study.",
+  "validation_role": "Higher-cost sensitivity scenario: 10 bps fee per fill, before applying futures base-fee scenario."
+}
