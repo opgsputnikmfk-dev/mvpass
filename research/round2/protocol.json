@@ -1,0 +1,78 @@
+{
+  "round": 2,
+  "candidates": [
+    [
+      "channel_4h",
+      20
+    ],
+    [
+      "channel_4h",
+      55
+    ],
+    [
+      "ema_4h",
+      12
+    ],
+    [
+      "ema_4h",
+      24
+    ],
+    [
+      "compression_1h",
+      20
+    ],
+    [
+      "compression_1h",
+      40
+    ]
+  ],
+  "development": [
+    "2025-01-01",
+    "2025-07-01"
+  ],
+  "selection": [
+    "2025-07-01",
+    "2025-10-01"
+  ],
+  "unseen_periods": [
+    [
+      "2025-10-01",
+      "2025-12-01"
+    ],
+    [
+      "2026-10-01",
+      "2026-10-24"
+    ]
+  ],
+  "already_inspected_not_holdout": "2026-01 through 2026-09; 2025-12 was already used as indicator warmup; 2026-10-24 through 2026-10-30 inspected in v3 baseline",
+  "risk_costs": {
+    "initial_equity": 10000,
+    "risk_per_trade": 0.0025,
+    "total_risk": 0.0075,
+    "same_direction_risk": 0.0035,
+    "max_positions": 3,
+    "max_same_direction": 2,
+    "position_notional_fraction": 0.25,
+    "gross_notional_fraction": 1.0,
+    "daily_loss_stop": 0.02,
+    "drawdown_stop": 0.08
+  },
+  "costs": {
+    "fee_per_side_bps": 5.5,
+    "adverse_execution_per_side_bps": 4.5,
+    "stress_execution_bps": 9.0
+  },
+  "max_hold_hours": 168,
+  "trailing_atr_multiple": 3,
+  "selection_rule": "Highest PF among selection candidates with >=20 trades and net>0; if none select highest net for diagnosis only. Lock before holdout. No final-period retuning.",
+  "admission": "Selection positive; both unseen periods positive net and PF>=1.15; combined unseen >=50 trades; DD<8% each; stress positive in both; selection neighbor parameter +/-10% both positive.",
+  "sources": [
+    "https://www.aqr.com/insights/research/journal-article/time-series-momentum",
+    "https://www.aqr.com/insights/research/journal-article/which-trend-is-your-friend"
+  ],
+  "caveats": [
+    "Prior paper covers other assets and longer horizons; these are new unproven crypto implementations.",
+    "Repeated searching increases overfitting risk; keep all rejected results.",
+    "New 2026-10 window is short; candidate still needs prospective observation."
+  ]
+}

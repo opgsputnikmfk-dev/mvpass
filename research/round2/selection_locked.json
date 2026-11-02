@@ -1,0 +1,487 @@
+{
+  "protocol": {
+    "round": 2,
+    "candidates": [
+      [
+        "channel_4h",
+        20
+      ],
+      [
+        "channel_4h",
+        55
+      ],
+      [
+        "ema_4h",
+        12
+      ],
+      [
+        "ema_4h",
+        24
+      ],
+      [
+        "compression_1h",
+        20
+      ],
+      [
+        "compression_1h",
+        40
+      ]
+    ],
+    "development": [
+      "2025-01-01",
+      "2025-07-01"
+    ],
+    "selection": [
+      "2025-07-01",
+      "2025-10-01"
+    ],
+    "unseen_periods": [
+      [
+        "2025-10-01",
+        "2025-12-01"
+      ],
+      [
+        "2026-10-01",
+        "2026-10-24"
+      ]
+    ],
+    "already_inspected_not_holdout": "2026-01 through 2026-09; 2025-12 was already used as indicator warmup; 2026-10-24 through 2026-10-30 inspected in v3 baseline",
+    "risk_costs": {
+      "initial_equity": 10000,
+      "risk_per_trade": 0.0025,
+      "total_risk": 0.0075,
+      "same_direction_risk": 0.0035,
+      "max_positions": 3,
+      "max_same_direction": 2,
+      "position_notional_fraction": 0.25,
+      "gross_notional_fraction": 1.0,
+      "daily_loss_stop": 0.02,
+      "drawdown_stop": 0.08
+    },
+    "costs": {
+      "fee_per_side_bps": 5.5,
+      "adverse_execution_per_side_bps": 4.5,
+      "stress_execution_bps": 9.0
+    },
+    "max_hold_hours": 168,
+    "trailing_atr_multiple": 3,
+    "selection_rule": "Highest PF among selection candidates with >=20 trades and net>0; if none select highest net for diagnosis only. Lock before holdout. No final-period retuning.",
+    "admission": "Selection positive; both unseen periods positive net and PF>=1.15; combined unseen >=50 trades; DD<8% each; stress positive in both; selection neighbor parameter +/-10% both positive.",
+    "sources": [
+      "https://www.aqr.com/insights/research/journal-article/time-series-momentum",
+      "https://www.aqr.com/insights/research/journal-article/which-trend-is-your-friend"
+    ],
+    "caveats": [
+      "Prior paper covers other assets and longer horizons; these are new unproven crypto implementations.",
+      "Repeated searching increases overfitting risk; keep all rejected results.",
+      "New 2026-10 window is short; candidate still needs prospective observation."
+    ]
+  },
+  "development": [
+    {
+      "strategy": "channel_4h",
+      "parameter": 20,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 71,
+      "net_usdt": 3.709166574819392,
+      "return_pct": 0.03709166574819012,
+      "win_rate_pct": 43.66197183098591,
+      "profit_factor": 1.0069827384603374,
+      "max_drawdown_pct": 2.3772283720946974,
+      "monthly_net": {
+        "2025-01": 43.99566854540717,
+        "2025-02": 69.84826875577164,
+        "2025-03": 18.924449855567218,
+        "2025-04": 6.775050937152628,
+        "2025-05": -74.40718491239932,
+        "2025-06": -61.42708660667995
+      },
+      "funding_net_paid": 1.6326856900287403,
+      "by_symbol": {
+        "BTCUSDT": -76.76676048068288,
+        "ETHUSDT": -17.51429227484317,
+        "SOLUSDT": 97.99021933036217
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "channel_4h",
+      "parameter": 55,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 44,
+      "net_usdt": 34.15832414919714,
+      "return_pct": 0.3415832414919606,
+      "win_rate_pct": 43.18181818181818,
+      "profit_factor": 1.123766441373061,
+      "max_drawdown_pct": 2.011868107036885,
+      "monthly_net": {
+        "2025-01": -29.19036589310781,
+        "2025-02": 104.52951963195846,
+        "2025-03": -0.25492162774753524,
+        "2025-04": 57.54041724306262,
+        "2025-05": -49.58969670269653,
+        "2025-06": -48.87662850227207
+      },
+      "funding_net_paid": 2.436916713670075,
+      "by_symbol": {
+        "BTCUSDT": -89.86780337264685,
+        "ETHUSDT": 39.787898955327464,
+        "SOLUSDT": 84.23822856650449
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "ema_4h",
+      "parameter": 12,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 57,
+      "net_usdt": -121.722895799463,
+      "return_pct": -1.2172289579946316,
+      "win_rate_pct": 38.59649122807018,
+      "profit_factor": 0.7838483702316958,
+      "max_drawdown_pct": 2.694627477422573,
+      "monthly_net": {
+        "2025-01": -7.172642863966757,
+        "2025-02": 71.2908371703561,
+        "2025-03": -111.21114250171013,
+        "2025-04": -70.62407041987535,
+        "2025-05": 74.33501538468408,
+        "2025-06": -78.34089256895095
+      },
+      "funding_net_paid": 2.778113662395733,
+      "by_symbol": {
+        "BTCUSDT": -51.96303562431737,
+        "ETHUSDT": -0.9303948774633024,
+        "SOLUSDT": -68.82946529769072
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "ema_4h",
+      "parameter": 24,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 27,
+      "net_usdt": 13.273981984330021,
+      "return_pct": 0.1327398198432972,
+      "win_rate_pct": 44.44444444444444,
+      "profit_factor": 1.112064118649486,
+      "max_drawdown_pct": 1.227639303530459,
+      "monthly_net": {
+        "2025-01": 34.635123406056664,
+        "2025-02": 40.17493996685516,
+        "2025-03": 24.860553005939437,
+        "2025-04": -26.525310593562608,
+        "2025-05": 15.122849808471074,
+        "2025-06": -74.99417360942971
+      },
+      "funding_net_paid": 1.08662355913746,
+      "by_symbol": {
+        "BTCUSDT": -51.44619837469288,
+        "ETHUSDT": 2.1476455710285745,
+        "SOLUSDT": 62.572534787988104
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "compression_1h",
+      "parameter": 20,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 184,
+      "net_usdt": -285.993292230356,
+      "return_pct": -2.859932922303565,
+      "win_rate_pct": 29.347826086956523,
+      "profit_factor": 0.8207522700648826,
+      "max_drawdown_pct": 6.096415801076782,
+      "monthly_net": {
+        "2025-01": 19.121016794573734,
+        "2025-02": 57.54238471540157,
+        "2025-03": -104.29318840519227,
+        "2025-04": -116.42385450461916,
+        "2025-05": -191.89620636866312,
+        "2025-06": 49.95655553814322
+      },
+      "funding_net_paid": 8.02794208973301,
+      "by_symbol": {
+        "BTCUSDT": -351.0198063876687,
+        "ETHUSDT": -223.6560335024786,
+        "SOLUSDT": 288.6825476597704
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "compression_1h",
+      "parameter": 40,
+      "period": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "trades": 147,
+      "net_usdt": -377.1729564872112,
+      "return_pct": -3.771729564872117,
+      "win_rate_pct": 29.931972789115648,
+      "profit_factor": 0.7318740210751212,
+      "max_drawdown_pct": 6.005848804574554,
+      "monthly_net": {
+        "2025-01": -6.9174488057597046,
+        "2025-02": 79.35646900128631,
+        "2025-03": -124.674083818074,
+        "2025-04": -172.36687721759336,
+        "2025-05": -144.05016972349586,
+        "2025-06": -8.520845923574598
+      },
+      "funding_net_paid": 6.197162251509904,
+      "by_symbol": {
+        "BTCUSDT": -288.9257313268115,
+        "ETHUSDT": -355.3922726235789,
+        "SOLUSDT": 267.1450474631703
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    }
+  ],
+  "selection": [
+    {
+      "strategy": "channel_4h",
+      "parameter": 20,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 34,
+      "net_usdt": 167.74743014532214,
+      "return_pct": 1.677474301453219,
+      "win_rate_pct": 64.70588235294117,
+      "profit_factor": 2.1901487017380625,
+      "max_drawdown_pct": 0.8656617884735596,
+      "monthly_net": {
+        "2025-07": 71.33972103011729,
+        "2025-08": 37.296703784484635,
+        "2025-09": 59.11100533072022
+      },
+      "funding_net_paid": 2.0300923943947167,
+      "by_symbol": {
+        "BTCUSDT": 21.15824472825199,
+        "ETHUSDT": 120.89700051118308,
+        "SOLUSDT": 25.692184905876843
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "channel_4h",
+      "parameter": 55,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 23,
+      "net_usdt": 131.08509279168175,
+      "return_pct": 1.3108509279168068,
+      "win_rate_pct": 52.17391304347826,
+      "profit_factor": 1.9498501908480366,
+      "max_drawdown_pct": 1.131703210015933,
+      "monthly_net": {
+        "2025-07": 76.32300852393382,
+        "2025-08": 8.38644249204117,
+        "2025-09": 46.375641775706754
+      },
+      "funding_net_paid": 2.9806258139228095,
+      "by_symbol": {
+        "BTCUSDT": -0.1728478772101214,
+        "ETHUSDT": 68.9561251609296,
+        "SOLUSDT": 62.30181550796241
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "ema_4h",
+      "parameter": 12,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 19,
+      "net_usdt": 169.84550599203976,
+      "return_pct": 1.6984550599203896,
+      "win_rate_pct": 52.63157894736842,
+      "profit_factor": 2.7411257796660697,
+      "max_drawdown_pct": 0.6978392971592418,
+      "monthly_net": {
+        "2025-07": -26.06135737499062,
+        "2025-08": 132.2541578027285,
+        "2025-09": 63.65270556430187
+      },
+      "funding_net_paid": -0.01212970284024349,
+      "by_symbol": {
+        "BTCUSDT": 28.671905500239937,
+        "ETHUSDT": 191.2763386239479,
+        "SOLUSDT": -50.10273813213858
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "ema_4h",
+      "parameter": 24,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 11,
+      "net_usdt": 137.90237184112448,
+      "return_pct": 1.3790237184112542,
+      "win_rate_pct": 63.63636363636363,
+      "profit_factor": 14.503871028284005,
+      "max_drawdown_pct": 0.5064683028353834,
+      "monthly_net": {
+        "2025-07": 26.85672742288807,
+        "2025-08": 51.40293352592744,
+        "2025-09": 59.64271089230897
+      },
+      "funding_net_paid": 1.3176360922899126,
+      "by_symbol": {
+        "BTCUSDT": 29.951056148758084,
+        "ETHUSDT": 111.63150110645219,
+        "SOLUSDT": -3.680185414079194
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "compression_1h",
+      "parameter": 20,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 93,
+      "net_usdt": 267.6069077660668,
+      "return_pct": 2.67606907766067,
+      "win_rate_pct": 35.483870967741936,
+      "profit_factor": 1.3432410209027306,
+      "max_drawdown_pct": 2.95528537364691,
+      "monthly_net": {
+        "2025-07": 228.92220456992072,
+        "2025-08": 112.78090690476893,
+        "2025-09": -74.09620370862285
+      },
+      "funding_net_paid": 7.6552577863893205,
+      "by_symbol": {
+        "BTCUSDT": 127.59545580680114,
+        "ETHUSDT": 189.92926170204652,
+        "SOLUSDT": -49.91780974278625
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "compression_1h",
+      "parameter": 40,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 73,
+      "net_usdt": 42.07355083339098,
+      "return_pct": 0.4207355083339026,
+      "win_rate_pct": 28.767123287671232,
+      "profit_factor": 1.062057828376967,
+      "max_drawdown_pct": 3.4856553237731847,
+      "monthly_net": {
+        "2025-07": 100.63041100000373,
+        "2025-08": -100.42690797300565,
+        "2025-09": 41.870047806392904
+      },
+      "funding_net_paid": 6.4583905334687595,
+      "by_symbol": {
+        "BTCUSDT": -68.23181240249991,
+        "ETHUSDT": 255.00787959173954,
+        "SOLUSDT": -144.70251635586106
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    }
+  ],
+  "chosen": {
+    "strategy": "channel_4h",
+    "parameter": 20,
+    "selection_qualified": true
+  },
+  "sensitivity": [
+    {
+      "strategy": "channel_4h",
+      "parameter": 18,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 38,
+      "net_usdt": 133.85399883475657,
+      "return_pct": 1.3385399883475646,
+      "win_rate_pct": 55.26315789473684,
+      "profit_factor": 1.6505932204093015,
+      "max_drawdown_pct": 1.2527523766878712,
+      "monthly_net": {
+        "2025-07": 75.8569870546562,
+        "2025-08": -1.5548640341021382,
+        "2025-09": 59.5518758142025
+      },
+      "funding_net_paid": 2.607734363290027,
+      "by_symbol": {
+        "BTCUSDT": 10.178660371652548,
+        "ETHUSDT": 135.34565764946842,
+        "SOLUSDT": -11.670319186374034
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "channel_4h",
+      "parameter": 22,
+      "period": [
+        "2025-07-01",
+        "2025-10-01"
+      ],
+      "trades": 32,
+      "net_usdt": 162.13232372470338,
+      "return_pct": 1.621323237247041,
+      "win_rate_pct": 56.25,
+      "profit_factor": 2.276860139865734,
+      "max_drawdown_pct": 0.7918735966421342,
+      "monthly_net": {
+        "2025-07": 71.98799526199036,
+        "2025-08": 55.83570434527246,
+        "2025-09": 34.30862411744056
+      },
+      "funding_net_paid": 2.4460575057488048,
+      "by_symbol": {
+        "BTCUSDT": 13.55609317974444,
+        "ETHUSDT": 114.60961989759792,
+        "SOLUSDT": 33.96661064736513
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    }
+  ]
+}

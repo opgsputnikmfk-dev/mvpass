@@ -74,8 +74,9 @@ def features(d):
     r['slope']=(r.ema50-r.ema50.shift(3))/r.atr
     return r
 
-def load_data(cache):
-    jobs=[(s,m,k) for s in SYMBOLS for m in MONTHS for k in ('klines','markPriceKlines','fundingRate')]
+def load_data(cache, months=None, end_exclusive=None):
+    months = MONTHS if months is None else months
+    jobs=[(s,m,k) for s in SYMBOLS for m in months for k in ('klines','markPriceKlines','fundingRate')]
     with cf.ThreadPoolExecutor(max_workers=6) as pool:
         futures=[pool.submit(archive,cache,*job) for job in jobs]
         for i,f in enumerate(cf.as_completed(futures),1):
@@ -85,10 +86,27 @@ def load_data(cache):
     for symbol in SYMBOLS:
         parts={}
         for kind in ('klines','markPriceKlines','fundingRate'):
-            paths=[archive(cache,symbol,m,kind) for m in MONTHS]
+            paths=[archive(cache,symbol,m,kind) for m in months]
             parts[kind]=pd.concat([read_zip(p) for p in paths],ignore_index=True)
             manifest += [{'file':str(p.relative_to(cache)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in paths]
         d=parts['klines'];mark=parts['markPriceKlines'];fund=parts['fundingRate']
+        period_start=ms(months[0]+'-01')
+        period_end=int((pd.Timestamp(months[-1]+'-01',tz='UTC')+pd.offsets.MonthBegin(1)).timestamp()*1000)
+        if end_exclusive is not None:
+            period_end=min(period_end,ms(end_exclusive))
+            d=d.loc[d.close_time<period_end].reset_index(drop=True)
+            mark=mark.loc[mark.close_time<period_end].reset_index(drop=True)
+            fund=fund.loc[fund.calc_time<period_end].reset_index(drop=True)
+        missing_trade=pd.Index(np.arange(period_start,period_end,MIN)).difference(d.open_time)
+        if len(missing_trade):
+            days=sorted({pd.Timestamp(t,unit='ms',tz='UTC').strftime('%Y-%m-%d') for t in missing_trade})
+            repairs=[]
+            for date in days:
+                path=archive(cache,symbol,date,'klines');daily=read_zip(path)
+                repairs.append(daily.loc[daily.open_time.isin(missing_trade)])
+                manifest.append({'file':str(path.relative_to(cache)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'purpose':'fill missing monthly trade candles'})
+            d=pd.concat([d]+repairs,ignore_index=True).sort_values('open_time').reset_index(drop=True)
+            print('Repaired authoritative daily trading data',symbol,days,flush=True)
         validate_minutes(d)
         missing=set(d.open_time)-set(mark.open_time)
         if missing:
@@ -102,7 +120,7 @@ def load_data(cache):
             mark=pd.concat([mark]+repaired,ignore_index=True).sort_values('open_time').reset_index(drop=True)
             print('Repaired authoritative daily mark data',symbol,days,flush=True)
         validate_minutes(mark)
-        if int(d.open_time.iloc[0])!=ms('2025-12-01') or int(d.close_time.iloc[-1])+1!=ms('2026-10-01'):raise ValueError('Incomplete period')
+        if int(d.open_time.iloc[0])!=period_start or int(d.close_time.iloc[-1])+1!=period_end:raise ValueError('Incomplete period')
         if not np.array_equal(d.open_time,mark.open_time):raise ValueError('Mark price dates mismatch')
         if not fund.calc_time.is_monotonic_increasing or fund.calc_time.duplicated().any():raise ValueError('Invalid funding chronology')
         if not np.isfinite(fund.last_funding_rate).all():raise ValueError('Invalid funding rate')
@@ -147,10 +165,11 @@ def signals(f,kind,param):
     # Knowledge time = candle close. Execute one full minute after its boundary.
     return {int(t+1+MIN):row.to_dict() for t,row in result.iterrows()}
 
-def simulate(data,kind,param,start,end,execution_bps=4.5):
+def simulate(data,kind,param,start,end,execution_bps=4.5,schedules_override=None,max_hold_hours=12,trailing_multiple=None,include_trades=False):
     a,b=ms(start),ms(end);slip=execution_bps/10000;fee=.00055
     first=int(next(iter(data.values()))['minute'][0,0]);lo=(a-first)//MIN;hi=(b-first)//MIN
-    schedules={s:signals(x['features'],kind,param) for s,x in data.items()}
+    schedules=schedules_override if schedules_override is not None else {s:signals(x['features'],kind,param) for s,x in data.items()}
+    curve=[]
     balance=10000.;peak=balance;dd=0.;positions={};cooldowns={};trades=[];monthly={};day=None;day_start=balance;paused=False;dd_paused=False
     def equity():
         return balance+sum(p['qty']*(p['side']*(p['mark']*(1-p['side']*slip)-p['entry'])-fee*p['mark']*(1-p['side']*slip)) for p in positions.values())
@@ -173,9 +192,9 @@ def simulate(data,kind,param,start,end,execution_bps=4.5):
             if len(positions)>=3 or sum(p['side']==side for p in positions.values())>=2:continue
             if abs(o-sig['reference'])>.5*sig['atr']:continue
             entry=o*(1+side*slip);stop=sig['stop'];target=sig['target'];distance=side*(entry-stop)
-            if distance<=0 or side*(target-entry)<=0:continue
+            if distance<=0 or (target is not None and side*(target-entry)<=0):continue
             risk_unit=side*(entry-stop*(1-side*slip))+fee*(entry+stop*(1-side*slip))
-            net_reward=side*(target*(1-side*slip)-entry)-fee*(entry+target*(1-side*slip))
+            net_reward=side*(target*(1-side*slip)-entry)-fee*(entry+target*(1-side*slip)) if target is not None else float('inf')
             if net_reward/risk_unit<.75:continue
             eq=equity();risk=min(eq*.0025,eq*.0075-sum(p['risk'] for p in positions.values()),eq*.0035-sum(p['risk'] for p in positions.values() if p['side']==side))
             notional=min(eq*.25,eq-sum(p['qty']*p['mark'] for p in positions.values()))
@@ -190,21 +209,28 @@ def simulate(data,kind,param,start,end,execution_bps=4.5):
                 if ft>p['ts']:
                     charge=side*p['qty']*mark*rate;balance-=charge;p['funding']+=charge
             stop_hit=l<=p['stop'] if side==1 else h>=p['stop']
-            target_hit=h>=p['target'] if side==1 else l<=p['target']
+            target_hit=False if p['target'] is None else (h>=p['target'] if side==1 else l<=p['target'])
             if stop_hit:close(symbol,min(o,p['stop']) if side==1 else max(o,p['stop']),ts+MIN-1,'STOP_BOTH' if target_hit else 'STOP')
             elif target_hit:close(symbol,p['target'],ts+MIN-1,'TARGET')
-            elif ts+MIN-p['ts']>=12*60*MIN or i==hi-1:close(symbol,c,ts+MIN-1,'TIME' if i!=hi-1 else 'PERIOD_END')
+            elif ts+MIN-p['ts']>=max_hold_hours*60*MIN or i==hi-1:close(symbol,c,ts+MIN-1,'TIME' if i!=hi-1 else 'PERIOD_END')
             else:p['mark']=c
+            # Trail only after this CLOSED bar has been processed; next minute activation.
+            trail=data[symbol].get('trailing',{}).get(ts+MIN-1)
+            if symbol in positions and trailing_multiple is not None and trail is not None:
+                new_stop=c-side*trailing_multiple*trail
+                p['stop']=max(p['stop'],new_stop) if side==1 else min(p['stop'],new_stop)
         eq=equity();peak=max(peak,eq);dd=max(dd,1-eq/peak)
         if eq<day_start*.98:paused=True
         if eq<peak*.92:dd_paused=True
-        if (ts+MIN)%86400000==0:monthly[pd.Timestamp(ts,unit='ms',tz='UTC').strftime('%Y-%m')]=eq
+        if (ts+MIN)%86400000==0:
+            monthly[pd.Timestamp(ts,unit='ms',tz='UTC').strftime('%Y-%m')]=eq
+            curve.append({'ts':ts+MIN,'equity':eq})
     gains=sum(max(t['net'],0) for t in trades);losses=-sum(min(t['net'],0) for t in trades)
     monthly_net={};prev=10000.
     for m,e in monthly.items():monthly_net[m]=e-prev;prev=e
     # This invariant catches double-charged fees/funding and ledger drift.
     if not math.isclose(balance-10000,sum(t['net'] for t in trades),abs_tol=1e-6):raise AssertionError('Ledger mismatch')
-    return {'strategy':kind,'parameter':param,'period':[start,end],'trades':len(trades),'net_usdt':balance-10000,'return_pct':(balance/10000-1)*100,'win_rate_pct':100*sum(t['net']>0 for t in trades)/len(trades) if trades else 0,'profit_factor':gains/losses if losses else None,'max_drawdown_pct':dd*100,'monthly_net':monthly_net,'funding_net_paid':sum(t['funding'] for t in trades),'by_symbol':{s:sum(t['net'] for t in trades if t['symbol']==s) for s in data},'execution_bps':execution_bps,'drawdown_halt':dd_paused}
+    return {'daily_equity':curve,**({'trade_records':trades} if include_trades else {}),'strategy':kind,'parameter':param,'period':[start,end],'trades':len(trades),'net_usdt':balance-10000,'return_pct':(balance/10000-1)*100,'win_rate_pct':100*sum(t['net']>0 for t in trades)/len(trades) if trades else 0,'profit_factor':gains/losses if losses else None,'max_drawdown_pct':dd*100,'monthly_net':monthly_net,'funding_net_paid':sum(t['funding'] for t in trades),'by_symbol':{s:sum(t['net'] for t in trades if t['symbol']==s) for s in data},'execution_bps':execution_bps,'drawdown_halt':dd_paused}
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--cache',type=Path,required=True);p.add_argument('--output',type=Path,required=True);args=p.parse_args()
