@@ -1,0 +1,538 @@
+{
+  "protocol": {
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "months": [
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07",
+      "2026-08",
+      "2026-09"
+    ],
+    "variants": [
+      [
+        "pullback",
+        1.5
+      ],
+      [
+        "pullback",
+        2.0
+      ],
+      [
+        "breakout",
+        20
+      ],
+      [
+        "breakout",
+        40
+      ],
+      [
+        "reversion",
+        2.0
+      ],
+      [
+        "reversion",
+        2.5
+      ]
+    ],
+    "periods": {
+      "development": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "selection": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "holdout": [
+        "2026-07-01",
+        "2026-10-01"
+      ]
+    },
+    "selection_rule": "Among validation variants with >=30 trades and positive net choose highest profit factor; if none, choose highest net only as diagnostic, without qualification.",
+    "acceptance": {
+      "validation_positive": true,
+      "holdout_trades_min": 50,
+      "holdout_profit_factor_min": 1.15,
+      "holdout_positive_months_min": 2,
+      "holdout_max_drawdown": 0.08,
+      "double_execution_cost_stress_positive": true
+    },
+    "costs": {
+      "fee_per_side_bps": 5.5,
+      "adverse_execution_per_side_bps": 4.5,
+      "stress_execution_bps": 9.0
+    },
+    "risk": {
+      "initial_equity": 10000,
+      "risk_per_trade": 0.0025,
+      "total_risk": 0.0075,
+      "same_direction_risk": 0.0035,
+      "max_positions": 3,
+      "max_same_direction": 2,
+      "position_notional_fraction": 0.25,
+      "gross_notional_fraction": 1.0,
+      "daily_loss_stop": 0.02,
+      "drawdown_stop": 0.08
+    },
+    "execution": "Decision on completed 15m bar, entry one minute after bar boundary. Minute OHLC, stop-first on ambiguous bars, adverse gaps. No partial take profits. 12h time exit. 30m cooldown. No leverage.",
+    "funding": "Actual published rate; event uses mark-price minute open as proxy for exact settlement mark. Charged before intraminute exits; timestamp ordering within a minute is approximate.",
+    "limitations": [
+      "Three established survivor assets; not the full exchange universe.",
+      "Historical bid/ask and exact fills unavailable; fixed spread/slippage scenario.",
+      "No liquidation simulation because gross notional capped at equity.",
+      "One untouched chronological holdout; not a full repeated walk-forward study.",
+      "No parameter tuning after holdout inspection."
+    ]
+  },
+  "development": [
+    {
+      "strategy": "pullback",
+      "parameter": 1.5,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 248,
+      "net_usdt": -725.1148813947093,
+      "return_pct": -7.251148813947095,
+      "win_rate_pct": 39.91935483870968,
+      "profit_factor": 0.7078783107228642,
+      "max_drawdown_pct": 8.108715399386202,
+      "monthly_net": {
+        "2026-01": -388.128694351537,
+        "2026-02": -336.9861870431723,
+        "2026-03": 0.0,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": 3.168702241502909,
+      "by_symbol": {
+        "BTCUSDT": -411.33765499518677,
+        "ETHUSDT": -96.6583955097232,
+        "SOLUSDT": -217.11883088981122
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "pullback",
+      "parameter": 2.0,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 284,
+      "net_usdt": -743.017427598832,
+      "return_pct": -7.430174275988321,
+      "win_rate_pct": 36.971830985915496,
+      "profit_factor": 0.7424401748316848,
+      "max_drawdown_pct": 8.118285485140564,
+      "monthly_net": {
+        "2026-01": -352.8657790655634,
+        "2026-02": -99.8430141608369,
+        "2026-03": -290.3086343724317,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": 5.574279031567582,
+      "by_symbol": {
+        "BTCUSDT": -289.56438897262996,
+        "ETHUSDT": -366.9063843392233,
+        "SOLUSDT": -86.54665428698773
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "breakout",
+      "parameter": 20,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 223,
+      "net_usdt": -790.6602703445405,
+      "return_pct": -7.906602703445409,
+      "win_rate_pct": 33.63228699551569,
+      "profit_factor": 0.6887526241424665,
+      "max_drawdown_pct": 8.14092171851495,
+      "monthly_net": {
+        "2026-01": -206.35272044500016,
+        "2026-02": -396.1384702144678,
+        "2026-03": -188.16907968507257,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": 3.8005072226765284,
+      "by_symbol": {
+        "BTCUSDT": -336.9574182022429,
+        "ETHUSDT": -173.78958182266396,
+        "SOLUSDT": -279.9132703196331
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "breakout",
+      "parameter": 40,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 190,
+      "net_usdt": -787.7357857532443,
+      "return_pct": -7.877357857532441,
+      "win_rate_pct": 33.68421052631579,
+      "profit_factor": 0.646118660117134,
+      "max_drawdown_pct": 8.188134055807373,
+      "monthly_net": {
+        "2026-01": -181.79063966884678,
+        "2026-02": -404.2287536160238,
+        "2026-03": -201.71639246837367,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": 4.469817736358415,
+      "by_symbol": {
+        "BTCUSDT": -218.52408095835662,
+        "ETHUSDT": -226.10528149942732,
+        "SOLUSDT": -343.1064232954639
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "reversion",
+      "parameter": 2.0,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 199,
+      "net_usdt": -694.9648736976014,
+      "return_pct": -6.949648736976011,
+      "win_rate_pct": 37.185929648241206,
+      "profit_factor": 0.6940585330691883,
+      "max_drawdown_pct": 8.123893725544562,
+      "monthly_net": {
+        "2026-01": -161.74649959489034,
+        "2026-02": -533.2183741027111,
+        "2026-03": 0.0,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": -2.6014358511875146,
+      "by_symbol": {
+        "BTCUSDT": -158.87963244137552,
+        "ETHUSDT": -265.42306992121587,
+        "SOLUSDT": -270.6621713349994
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "reversion",
+      "parameter": 2.5,
+      "period": [
+        "2026-01-01",
+        "2026-05-01"
+      ],
+      "trades": 166,
+      "net_usdt": -794.8666427059416,
+      "return_pct": -7.948666427059415,
+      "win_rate_pct": 34.93975903614458,
+      "profit_factor": 0.5937007294077871,
+      "max_drawdown_pct": 8.103817435223304,
+      "monthly_net": {
+        "2026-01": -515.7781742475636,
+        "2026-02": -279.088468458378,
+        "2026-03": 0.0,
+        "2026-04": 0.0
+      },
+      "funding_net_paid": -2.312267291273486,
+      "by_symbol": {
+        "BTCUSDT": -352.6820274159153,
+        "ETHUSDT": -14.383415604700012,
+        "SOLUSDT": -427.80119968533756
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    }
+  ],
+  "selection": [
+    {
+      "strategy": "pullback",
+      "parameter": 1.5,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 210,
+      "net_usdt": -293.95939526962866,
+      "return_pct": -2.9395939526962844,
+      "win_rate_pct": 43.80952380952381,
+      "profit_factor": 0.8475495144377775,
+      "max_drawdown_pct": 5.627973716999113,
+      "monthly_net": {
+        "2026-05": -529.2215608261977,
+        "2026-06": 235.26216555656902
+      },
+      "funding_net_paid": -1.4990639012692635,
+      "by_symbol": {
+        "BTCUSDT": -124.58743314442243,
+        "ETHUSDT": -132.34311970663146,
+        "SOLUSDT": -37.02884241858524
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "pullback",
+      "parameter": 2.0,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 231,
+      "net_usdt": -466.52818937396296,
+      "return_pct": -4.665281893739626,
+      "win_rate_pct": 38.52813852813853,
+      "profit_factor": 0.7922637292148594,
+      "max_drawdown_pct": 5.615480570814968,
+      "monthly_net": {
+        "2026-05": -541.550412592298,
+        "2026-06": 75.02222321833506
+      },
+      "funding_net_paid": -2.2531840787954214,
+      "by_symbol": {
+        "BTCUSDT": -250.82728336649149,
+        "ETHUSDT": -180.29531694821605,
+        "SOLUSDT": -35.4055890592512
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "breakout",
+      "parameter": 20,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 184,
+      "net_usdt": -626.1342996373805,
+      "return_pct": -6.261342996373809,
+      "win_rate_pct": 34.23913043478261,
+      "profit_factor": 0.6759378984805698,
+      "max_drawdown_pct": 6.990725150902932,
+      "monthly_net": {
+        "2026-05": -326.53436791575587,
+        "2026-06": -299.59993172162467
+      },
+      "funding_net_paid": -0.5425431786938437,
+      "by_symbol": {
+        "BTCUSDT": -427.8389172752657,
+        "ETHUSDT": -264.4865523686384,
+        "SOLUSDT": 66.19117000651501
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "breakout",
+      "parameter": 40,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 146,
+      "net_usdt": -637.3246251620803,
+      "return_pct": -6.373246251620801,
+      "win_rate_pct": 32.19178082191781,
+      "profit_factor": 0.6100495410556875,
+      "max_drawdown_pct": 6.7430127591384785,
+      "monthly_net": {
+        "2026-05": -298.1613218983075,
+        "2026-06": -339.16330326377283
+      },
+      "funding_net_paid": -0.914440572832456,
+      "by_symbol": {
+        "BTCUSDT": -221.0406175658092,
+        "ETHUSDT": -278.0723930017964,
+        "SOLUSDT": -138.2116145944694
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "reversion",
+      "parameter": 2.0,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 208,
+      "net_usdt": -814.3224411091651,
+      "return_pct": -8.143224411091655,
+      "win_rate_pct": 37.5,
+      "profit_factor": 0.6242689553078933,
+      "max_drawdown_pct": 8.152285844792617,
+      "monthly_net": {
+        "2026-05": -519.4939673206627,
+        "2026-06": -294.8284737885024
+      },
+      "funding_net_paid": -0.5315395875937889,
+      "by_symbol": {
+        "BTCUSDT": -271.47114681962944,
+        "ETHUSDT": -420.2024416148133,
+        "SOLUSDT": -122.648852674727
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    },
+    {
+      "strategy": "reversion",
+      "parameter": 2.5,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 163,
+      "net_usdt": -791.6479556624472,
+      "return_pct": -7.916479556624467,
+      "win_rate_pct": 34.355828220858896,
+      "profit_factor": 0.5538828754325333,
+      "max_drawdown_pct": 8.04584906581286,
+      "monthly_net": {
+        "2026-05": -355.50116272848754,
+        "2026-06": -436.14679293395966
+      },
+      "funding_net_paid": 0.14110550285913367,
+      "by_symbol": {
+        "BTCUSDT": -335.9306935080771,
+        "ETHUSDT": -381.3897518581945,
+        "SOLUSDT": -74.32751029616185
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": true
+    }
+  ],
+  "selected_before_holdout": {
+    "strategy": "pullback",
+    "parameter": 1.5,
+    "validation_qualified": false
+  },
+  "selection_parameter_sensitivity": [
+    {
+      "strategy": "pullback",
+      "parameter": 1.35,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 180,
+      "net_usdt": -305.5823332528962,
+      "return_pct": -3.055823332528962,
+      "win_rate_pct": 44.44444444444444,
+      "profit_factor": 0.8147909694980675,
+      "max_drawdown_pct": 4.0217641975093255,
+      "monthly_net": {
+        "2026-05": -353.2997547405321,
+        "2026-06": 47.717421487635875
+      },
+      "funding_net_paid": -1.854117738628532,
+      "by_symbol": {
+        "BTCUSDT": -73.76798015265425,
+        "ETHUSDT": -144.772032418477,
+        "SOLUSDT": -87.04232068176432
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    },
+    {
+      "strategy": "pullback",
+      "parameter": 1.6500000000000001,
+      "period": [
+        "2026-05-01",
+        "2026-07-01"
+      ],
+      "trades": 224,
+      "net_usdt": -378.0817888198362,
+      "return_pct": -3.7808178881983623,
+      "win_rate_pct": 41.964285714285715,
+      "profit_factor": 0.8191127326635772,
+      "max_drawdown_pct": 5.259832766704664,
+      "monthly_net": {
+        "2026-05": -484.1725642259844,
+        "2026-06": 106.09077540614817
+      },
+      "funding_net_paid": -1.9457093064087474,
+      "by_symbol": {
+        "BTCUSDT": -197.4120459106563,
+        "ETHUSDT": -199.83158888203803,
+        "SOLUSDT": 19.161845972841668
+      },
+      "execution_bps": 4.5,
+      "drawdown_halt": false
+    }
+  ],
+  "holdout": {
+    "strategy": "pullback",
+    "parameter": 1.5,
+    "period": [
+      "2026-07-01",
+      "2026-10-01"
+    ],
+    "trades": 111,
+    "net_usdt": -764.072462587379,
+    "return_pct": -7.640724625873796,
+    "win_rate_pct": 28.82882882882883,
+    "profit_factor": 0.4133962537781462,
+    "max_drawdown_pct": 8.066286135109968,
+    "monthly_net": {
+      "2026-07": -634.4619333369646,
+      "2026-08": -129.6105292504144,
+      "2026-09": 0.0
+    },
+    "funding_net_paid": 2.9984387430542014,
+    "by_symbol": {
+      "BTCUSDT": -292.9491446209878,
+      "ETHUSDT": -259.6406157993139,
+      "SOLUSDT": -211.48270216708778
+    },
+    "execution_bps": 4.5,
+    "drawdown_halt": true
+  },
+  "holdout_stress": {
+    "strategy": "pullback",
+    "parameter": 1.5,
+    "period": [
+      "2026-07-01",
+      "2026-10-01"
+    ],
+    "trades": 129,
+    "net_usdt": -781.8740533019318,
+    "return_pct": -7.818740533019319,
+    "win_rate_pct": 34.10852713178294,
+    "profit_factor": 0.4744445752538457,
+    "max_drawdown_pct": 8.020700233191825,
+    "monthly_net": {
+      "2026-07": -511.22410653839506,
+      "2026-08": -270.6499467635367,
+      "2026-09": 0.0
+    },
+    "funding_net_paid": 4.270821168786328,
+    "by_symbol": {
+      "BTCUSDT": -269.27825617999616,
+      "ETHUSDT": -240.55098982407534,
+      "SOLUSDT": -272.0448072978575
+    },
+    "execution_bps": 9.0,
+    "drawdown_halt": true
+  },
+  "accepted": false
+}

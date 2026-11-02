@@ -1,0 +1,94 @@
+{
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
+  "months": [
+    "2025-12",
+    "2026-01",
+    "2026-02",
+    "2026-03",
+    "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
+    "2026-08",
+    "2026-09"
+  ],
+  "variants": [
+    [
+      "pullback",
+      1.5
+    ],
+    [
+      "pullback",
+      2.0
+    ],
+    [
+      "breakout",
+      20
+    ],
+    [
+      "breakout",
+      40
+    ],
+    [
+      "reversion",
+      2.0
+    ],
+    [
+      "reversion",
+      2.5
+    ]
+  ],
+  "periods": {
+    "development": [
+      "2026-01-01",
+      "2026-05-01"
+    ],
+    "selection": [
+      "2026-05-01",
+      "2026-07-01"
+    ],
+    "holdout": [
+      "2026-07-01",
+      "2026-10-01"
+    ]
+  },
+  "selection_rule": "Among validation variants with >=30 trades and positive net choose highest profit factor; if none, choose highest net only as diagnostic, without qualification.",
+  "acceptance": {
+    "validation_positive": true,
+    "holdout_trades_min": 50,
+    "holdout_profit_factor_min": 1.15,
+    "holdout_positive_months_min": 2,
+    "holdout_max_drawdown": 0.08,
+    "double_execution_cost_stress_positive": true
+  },
+  "costs": {
+    "fee_per_side_bps": 5.5,
+    "adverse_execution_per_side_bps": 4.5,
+    "stress_execution_bps": 9.0
+  },
+  "risk": {
+    "initial_equity": 10000,
+    "risk_per_trade": 0.0025,
+    "total_risk": 0.0075,
+    "same_direction_risk": 0.0035,
+    "max_positions": 3,
+    "max_same_direction": 2,
+    "position_notional_fraction": 0.25,
+    "gross_notional_fraction": 1.0,
+    "daily_loss_stop": 0.02,
+    "drawdown_stop": 0.08
+  },
+  "execution": "Decision on completed 15m bar, entry one minute after bar boundary. Minute OHLC, stop-first on ambiguous bars, adverse gaps. No partial take profits. 12h time exit. 30m cooldown. No leverage.",
+  "funding": "Actual published rate; event uses mark-price minute open as proxy for exact settlement mark. Charged before intraminute exits; timestamp ordering within a minute is approximate.",
+  "limitations": [
+    "Three established survivor assets; not the full exchange universe.",
+    "Historical bid/ask and exact fills unavailable; fixed spread/slippage scenario.",
+    "No liquidation simulation because gross notional capped at equity.",
+    "One untouched chronological holdout; not a full repeated walk-forward study.",
+    "No parameter tuning after holdout inspection."
+  ]
+}

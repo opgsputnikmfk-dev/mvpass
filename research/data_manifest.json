@@ -1,0 +1,377 @@
+[
+  {
+    "file": "klines/BTCUSDT-1m-2025-12.zip",
+    "sha256": "2d5b2e1887dac1dfe450010877de7203a72e19df7a771067b980bbb07ad3069c"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-01.zip",
+    "sha256": "58e9c620a6acda209d25766b3cf4262f3104649f5c26f247d933e0da8bb7946f"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-02.zip",
+    "sha256": "805626ad2dc5b704d52c211996d12e9e4b1be234998f3dba4b3d34ff79be0337"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-03.zip",
+    "sha256": "c472a865f230bf1b5b17e124770a83c083144e3e11a115733288fb8f3e3b8baa"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-04.zip",
+    "sha256": "515b86570f0c6924f6dc2cf90589d3db90f3de9c6bfd9a22dde0429995dc5405"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-05.zip",
+    "sha256": "d91548e94220d5211bb32447cc4b604ee266d145f2092edc5ec613328cbbc20a"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-06.zip",
+    "sha256": "9b214199eb5063585c7ed0f59ba19323326d68ac024b85106713989399204490"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-07.zip",
+    "sha256": "f18440bb58f0c7e1ff63cbb906132002877c4914540c8aebab920da6937cff73"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-08.zip",
+    "sha256": "adfd0846ea580681aeb18a6bdf06660dcfcc1a7b6819ea2eecfc3c53240ec67a"
+  },
+  {
+    "file": "klines/BTCUSDT-1m-2026-09.zip",
+    "sha256": "e1a821b5bf6b48d57da01c3e390b8a467a698155def5c18c2c63c0eb044a3247"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2025-12.zip",
+    "sha256": "e1ed1dcd4ed9e7cf174a1c2e04f50f04e4fe52c787836cde8f6fadd32f3aef30"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-01.zip",
+    "sha256": "aa48fc9892158909320230708e8d04d8750b1b7b97c936bc926144ad28ec9021"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-02.zip",
+    "sha256": "2205f17c1d774577a2aeeb1015787d9f966437eaf27090d477f16ae1bdddc4d1"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-03.zip",
+    "sha256": "7731b4b15be1e59eb80422e7eee0067af124c42804c5e575e4cf5ed508d94687"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-04.zip",
+    "sha256": "a1655f959e24c73a010b949649d45fcb2854bb9e2f5fe8e998269eb6ad4585e4"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-05.zip",
+    "sha256": "c9e4475e8762b4e52b899785deca52bceb0efb9bf08bd411b3147cd5e1da5e25"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-06.zip",
+    "sha256": "5d5d8b86efbe709e034409634347a161183e7c0df3854f8d96c9778dc1c923ba"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-07.zip",
+    "sha256": "5bb16a0707eef96d648480ab45943f25b27425154b2ccb881c200cfd51e594ed"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-08.zip",
+    "sha256": "3bd0556d903ce14f833ed58c78fd8d3309bc1a3804bb401c9fa2dd9d902f2c37"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-09.zip",
+    "sha256": "68dfd75f32b99bd8019e914395d2a7d60d5c1a74a700fde9991bf19b0c39322e"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2025-12.zip",
+    "sha256": "35318b789f020b0e04c9043112480743855554e52e1d188437cbdaa67246d51d"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-01.zip",
+    "sha256": "fcdc796484f395830d418588a34a26baed8849dbef0ff2b56173247e493ff51f"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-02.zip",
+    "sha256": "80df1dd669dc1e3afc360c9da8b9a949a127fce088eedbf5bf708bd37b0a1f58"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-03.zip",
+    "sha256": "5c069d5e9597a44fd0e213395082e59ff223fb99c9eab3a2a5a2a5622ba7867c"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-04.zip",
+    "sha256": "51cdeb4de7d5ef1d4eece80b6115e391bdf7a2d0803bf9ad8371ab23340b22d3"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-05.zip",
+    "sha256": "445b65fd6b17bfcfb5e4d035db29fad34f729fa078f0449024db42621be84e6e"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-06.zip",
+    "sha256": "cff97ce688329592bccbbf5873b5c7021649e093f5f5806e332c5b4fb7fd6a00"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-07.zip",
+    "sha256": "e36fcc66f493d7d9ec348c852fc22e9f318c79cf7adae17398a3994ae0adc41e"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-08.zip",
+    "sha256": "7c108b3a02bd6dc7345ca7323e3a49664edcea0afdcf780ffb3b44762c45a964"
+  },
+  {
+    "file": "fundingRate/BTCUSDT-fundingRate-2026-09.zip",
+    "sha256": "913cd31b8f924a06717a2fac17f3df6132c24ccded209eb3e4ae7d83e1b247f2"
+  },
+  {
+    "file": "markPriceKlines/BTCUSDT-1m-2026-06-29.zip",
+    "sha256": "200e2ef30a86e9f91c011dae30d864f73c8480fddecc73ea227958596f6cd11c",
+    "purpose": "fill missing monthly mark-price minutes"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2025-12.zip",
+    "sha256": "8fc3e01faeb240ed9f77e4ba8bbcdf42bb7b0c7004d35fe8010bd0fd9090e4a9"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-01.zip",
+    "sha256": "0dc9c455c6d0735fe7e177d98a5088ab473c7fc1fa723710e783ff5dd49df4bb"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-02.zip",
+    "sha256": "2109cab7fa27eee904a7d6d6dd982633579fc4091765dc8fa16c001f2da8a1c2"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-03.zip",
+    "sha256": "d61eeba7aed3067525c6503bfbfd4f8d55585b846b67115eb85eeb1d2f857bf1"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-04.zip",
+    "sha256": "fd01f08f331a0dcb5d89c718afb199f7cda63f43228b72ddda0bdd08bfd527c7"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-05.zip",
+    "sha256": "9710b3d1e350bef5bf31b8d1531c5801d35f963d223d0a42e73ae86ddd376e92"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-06.zip",
+    "sha256": "3b771e114b494805ac4cc677b34befb7e5f332bf5bd3a8a368cd21d65cd99cba"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-07.zip",
+    "sha256": "5c98ad0cfa152fbe08df59838ead7c8bbfa433af943bbfb4d082626ebee2d83e"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-08.zip",
+    "sha256": "038b412935c3349e95b4abe3e9cec8a7fd521d16ce73fff3c2f92d605b252b9e"
+  },
+  {
+    "file": "klines/ETHUSDT-1m-2026-09.zip",
+    "sha256": "c85c7ec631fa7fe3a90c30e4ef6a76aeac0b88be895872388d87a6a8fd3d2892"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2025-12.zip",
+    "sha256": "d0bec7a0985a1dcaa31f82232a94f8f05f48b4bb73242b3d01e16d7b2d79d94f"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-01.zip",
+    "sha256": "68df831e9bf82f7609e9234007511d0afb783aaea35008507dbbac635d3b2eb6"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-02.zip",
+    "sha256": "17a6c9aa7400a8f9d7086988af3a5d678b18e7b9b44e0be112e6039c9649c92f"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-03.zip",
+    "sha256": "e94f7d38667507fb4dae63f1c9635454d07b9eaecf0c800500d139d3a1e7c256"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-04.zip",
+    "sha256": "35e38fcee8b7070336fc467d7009c31fbb2f2574f7bde4f363995020dd7b4f2b"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-05.zip",
+    "sha256": "34d55ec2c9c1726b79914b8766edb279d025e6319f53d5099c9f6a60714351cc"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-06.zip",
+    "sha256": "aa2afb08a5d8e24cf2c986228fbfeb28e97a58ccda0bda798c6855fbfb2521ed"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-07.zip",
+    "sha256": "641ce19380be3671714cf4e358d671737af834534e6e6f1f75852ffc07ce3e7d"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-08.zip",
+    "sha256": "d00934bc9bef31b683c5d689b5812d1397085eed11eff8dcb4babd80dbf0870b"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-09.zip",
+    "sha256": "dcca59f8b352059563ade58ae52369bc02e9934857cb3bd790813c561d2dfaff"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2025-12.zip",
+    "sha256": "ef9e84f53a5fa07702958c8700077c8be0a90ec8b3e25110f5611109c3c0090c"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-01.zip",
+    "sha256": "830cf7797ea6ecdc554ac2d9047a141df1a6a544f4ea58e7028227930462b139"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-02.zip",
+    "sha256": "e445f00c81a7fa8361d99b3660f24b4f58e5d952fe301d70bbc72c319bc01a77"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-03.zip",
+    "sha256": "9f5625846c503a1e94fcdecd2deb37dc8852e341add353fa48c2b9a0cc70df6a"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-04.zip",
+    "sha256": "86160f455478a8b262d96d1516f583355e6e0cec7beeb5784e69dda76f599e98"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-05.zip",
+    "sha256": "ff926ad3fc48493c26c85af16620b19c695cc1854faa1e7f0ea2ab9fdafc2084"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-06.zip",
+    "sha256": "cc6fb028a811bc423b711f6b89de067bf92a2eda61303e1ce0b219b5d3210e47"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-07.zip",
+    "sha256": "ece7f6c64d0e45fbd64929dec40bae525fe365381046e367de5ca0827bc623d3"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-08.zip",
+    "sha256": "8b843307038b3aedf725b1342003cce39f9526451ed92f407ca80bc637487839"
+  },
+  {
+    "file": "fundingRate/ETHUSDT-fundingRate-2026-09.zip",
+    "sha256": "d1916b9181cf3507ad5a6522ac6587cd84a424941f1a2132ab887f768b5dd4de"
+  },
+  {
+    "file": "markPriceKlines/ETHUSDT-1m-2026-06-29.zip",
+    "sha256": "cc07f9a3f5580a443512096c2de20d3d59a52be76f07668c87a6418bf762f07b",
+    "purpose": "fill missing monthly mark-price minutes"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2025-12.zip",
+    "sha256": "c9375b066069aaa4dbf33fbf7c79ca9db4a534b99d4ebd9f558ba2381e610636"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-01.zip",
+    "sha256": "ac9cc536ec056e7c4fc4f391da5edbe778f59fb2a059670875d05285ebca3fcf"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-02.zip",
+    "sha256": "ad93c921265eb4a473ba91d21f8d02346d77330475740977cc7541a0ac1ec05a"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-03.zip",
+    "sha256": "d705ca5ec2de775733be12c6e3f29bcf3204be15d7b0b273ec87a013fcaa612f"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-04.zip",
+    "sha256": "8ce6bb0ea598eecdfa2078cc1429c7fc4fc39a32d306d74184f137fa6ae8d3cb"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-05.zip",
+    "sha256": "588bdc611885c6de2bd55df7f8fbc597147ca0eef33f6824e340d2bff1a04066"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-06.zip",
+    "sha256": "dcd12574ab820047a10c3e6977b69251b7285fe7998fa7aff6d73470c6637ecd"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-07.zip",
+    "sha256": "10b4d10f286b8cc658af3e441dbd0369b7b5e727626049cab59545f0c00062c0"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-08.zip",
+    "sha256": "0d895f66c4c07969845decf7d8e8752b0d8cb5409ca737b7b48c8751d4fd6f1f"
+  },
+  {
+    "file": "klines/SOLUSDT-1m-2026-09.zip",
+    "sha256": "58bcf27df2447043d9e955674de7c73bc42b848a7b8beb08d7800c9dd04813d1"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2025-12.zip",
+    "sha256": "94bd1c7ee954135d63b4f16712838c9a0bbd1d65aa0f181a915d8a3288be43e8"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-01.zip",
+    "sha256": "aecdf0f538afc6ca26deb833b843205b6e6429706e6bd5f9c54324df633877a7"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-02.zip",
+    "sha256": "4a8fb94b8959bc41d0a61ab2d4075dd93b770cd27c252a4d531534728b1adb64"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-03.zip",
+    "sha256": "bf46cf5227298d5932cfc72c2d89b27b5c56f545acc1ce3d6cd113039edb8865"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-04.zip",
+    "sha256": "80962d61c81e08ac11aa7a185aad922aaf0680059706ee10473157da1f84fc69"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-05.zip",
+    "sha256": "6dfb8152839989edab623be24f32c4bd3d4f346b9e8ca7f0ba7af771ec102515"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-06.zip",
+    "sha256": "3ffa4946a92f141849689c8d1a0a904ed9cef3731a19193c21e804c98a38873b"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-07.zip",
+    "sha256": "a2edbe971087a995a10f78eb805f38c64d46bcd5691b38574587bc91021a0a21"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-08.zip",
+    "sha256": "77bf9fa1ec5f8c95f313c1197b276f29eb61183abbfa31dc1843ff3bf6791746"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-09.zip",
+    "sha256": "f6a8295c918adb69a937cecbd35827d484f2019453818e81a43003a9d017c96e"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2025-12.zip",
+    "sha256": "01db13c460b0190736e1da019c7fcd7ea0abbf3b047e16d3aa8a9e9acec3101f"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-01.zip",
+    "sha256": "c53be79aae38a1f35e94880f106df4eceab57bfa74a0b5fc5852fdfabf57ab8e"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-02.zip",
+    "sha256": "84cb9bcf44ba1364b37db876e7c852aa1b831371556b610e2387115addec9d5f"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-03.zip",
+    "sha256": "75cfaea075d97779a577c3744ea63e3d83704f281806fb5f76f2d3e0f089fd2c"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-04.zip",
+    "sha256": "951a280e98b6d20fe4be25bf2b71f3cda1c07c7583a88cb874151e2b1fe941f1"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-05.zip",
+    "sha256": "c13066e5f7c5d161dbebd488cbeaab1205688c6dc7f9fafcc8f94296f2c1e47b"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-06.zip",
+    "sha256": "8d32fa3153d54c58667650e8b2c65e489b3a433b775052a93208bf60541a40d3"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-07.zip",
+    "sha256": "13f655eaa29865b16acc7bd97be74e212bc4c2139fc2f9ead4d150852c2a9ebb"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-08.zip",
+    "sha256": "593e99bb628c0b178a5a2c8f415e1ed489dfd7dea497366f1fee91b8768c704d"
+  },
+  {
+    "file": "fundingRate/SOLUSDT-fundingRate-2026-09.zip",
+    "sha256": "8503ce0767496c63929bedc4f43307efcea8216d181a873b32a695f6d85092ef"
+  },
+  {
+    "file": "markPriceKlines/SOLUSDT-1m-2026-06-29.zip",
+    "sha256": "98911fdf3ed80b200270f730004739f10034c8f1902227452cc87ad521df229d",
+    "purpose": "fill missing monthly mark-price minutes"
+  }
+]
