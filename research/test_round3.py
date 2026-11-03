@@ -7,6 +7,7 @@ class FundingTests(unittest.TestCase):
     def fixture(self):
         n=4*24*5;ts=(np.arange(n)+1)*15*r.MIN-1;c=np.linspace(100,120,n)
         f=pd.DataFrame(dict(open=c,high=c+1,low=c-1,close=c,volume=np.ones(n)),index=ts)
+        f.index.name='bucket'
         events={i*480:[(i*480*r.MIN,-.0004,100)] for i in range(15)}
         return {'features':f,'funding':events}
     def test_signal_after_settlement_and_future_invariance(self):
