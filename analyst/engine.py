@@ -57,7 +57,9 @@ class Engine:
 
     def state(self):
         with self.lock:
-            return {"app":"AI Crypto Analyst","version":"4.0.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            from .dashboard import report
+            return {"app":"AI Crypto Analyst","version":"4.1.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+                    "dashboard":report(self),
                     "status":self.status,"updated_at":self.updated_at,"generation":self.generation,"config":copy.deepcopy(self.config),
                     "market":copy.deepcopy(self.market),"accounts":{k:{"stats":a.stats(),"positions":[p.to_dict() for p in a.positions.values()],
                     "trades":a.closed[-100:],"curve":a.equity_curve[-2000:],"rejections":a.rejections[-20:]} for k,a in self.accounts.items()},

@@ -40,29 +40,65 @@ class Telegram:
         if not result.get("ok"):raise RuntimeError("Telegram API error")
         return result.get("result")
 
-    def menu(self,page=0,message_id=None):
+    def menu(self,page=-1,message_id=None):
         state=self.engine.state();cfg=state["config"];v=hashlib.sha256(state["generation"].encode()).hexdigest()[:8]
         a=state["accounts"].get(state["generation"]+":active",{}).get("stats",{})
+        if page == -1:
+            rows=[[{"text":"📊 Статистика наборов фильтров","callback_data":f"{v}:stats"}],
+                  [{"text":"🪙 Просматриваемые монеты","callback_data":f"{v}:coins"},{"text":"🎛 Все фильтры","callback_data":f"{v}:page:0"}],
+                  [{"text":"▶ Продолжить" if cfg["paused"] else "⏸ Пауза","callback_data":f"{v}:pause"},{"text":"↻ Обновить","callback_data":f"{v}:home"}]]
+            d=state["dashboard"];active=state["accounts"][state["generation"]+":active"]
+            enabled=sum(x=="on" for x in cfg["filters"].values())
+            text=("<b>AI Crypto · Главная</b>\nУчебные сделки · реальные ордера не отправляются\n\n"
+                  +html.escape(d["status_label"])+f"\nМонет в списке: {len(cfg['symbols'])} · фильтров включено: {enabled}\n"
+                  +f"Открыто сделок: {a.get('open',0)} · ожидают входа: {a.get('pending',0)}\n"
+                  +f"Закрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n"
+                  +f"Наибольшее снижение капитала: {a.get('max_drawdown_pct',0):.2f}%\n\n"
+                  +("⚠ Биржа не отдаёт данные. Новые сигналы не формируются.\n\n" if state["status"]=="DATA_ERROR" else "")
+                  +"<b>Что можно посмотреть</b>\n📊 Состав наборов, результаты и количество сделок\n🪙 Какие монеты выбраны и проверены\n🎛 Все переключатели в одном разделе\n\n/help — как пользоваться")
+            payload={"chat_id":self.chat_id,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}}
+            if message_id:payload["message_id"]=message_id
+            return self.call("editMessageText" if message_id else "sendMessage",payload)
         rows=[];items=list(FILTERS.items());page=max(0,min(4,page))
         modes={"on":"🟢","observe":"🟡","off":"⚫"}
         for key,label in items[page*5:page*5+5]:
             rows.append([{"text":f"{modes[cfg['filters'][key]]} {label}","callback_data":f"{v}:f:{key}:{page}"}])
         rows.append([{"text":"←","callback_data":f"{v}:page:{max(0,page-1)}"},{"text":f"{page+1}/5 · обновить","callback_data":f"{v}:page:{page}"},{"text":"→","callback_data":f"{v}:page:{min(4,page+1)}"}])
+        rows.append([{"text":"🏠 Главная","callback_data":f"{v}:home"}])
         rows.append([{"text":"Продолжить" if cfg["paused"] else "Пауза","callback_data":f"{v}:pause"},{"text":"Статистика","callback_data":f"{v}:stats"}])
-        text=f"<b>AI Crypto · Analyst 4.0</b>\n{'ДЕМО / искусственные данные' if self.engine.demo else 'УЧЕБНЫЕ СДЕЛКИ · Bybit USDT'}\nСостояние: {html.escape(state['status'])}\nСерия: <code>{v}</code>\n\nКапитал: {a.get('equity',0):,.2f} USDT\nЗакрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n\n<b>Фильтры</b>\n🟢 включён · 🟡 наблюдение · ⚫ выключен\nНажатие меняет режим и создаёт новую серию.\n\n/chart BTCUSDT — график\n/stats — сравнение\n/setups — сценарии\n/help — команды"
+        text=f"<b>AI Crypto · Analyst 4.1</b>\n{'ДЕМО / искусственные данные' if self.engine.demo else 'УЧЕБНЫЕ СДЕЛКИ · Bybit USDT'}\nСостояние: {html.escape(state['dashboard']['status_label'])}\nСерия: <code>{v}</code>\n\nКапитал: {a.get('equity',0):,.2f} USDT\nЗакрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n\n<b>Фильтры</b>\n🟢 включён · 🟡 наблюдение · ⚫ выключен\nНажатие меняет режим и создаёт новую серию.\n\n/chart BTCUSDT — график\n/stats — сравнение\n/setups — сценарии\n/help — команды"
         payload={"chat_id":self.chat_id,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}}
         if message_id:payload["message_id"]=message_id
         return self.call("editMessageText" if message_id else "sendMessage",payload)
 
     def send(self,text,**kwargs):return self.call("sendMessage",{"chat_id":self.chat_id,"text":text,"parse_mode":"HTML",**kwargs})
 
-    def stats(self):
-        state=self.engine.state();lines=["<b>Параллельные учебные счета</b>"]
-        for key,a in state["accounts"].items():
-            if key.startswith(state["generation"]):
-                s=a["stats"];lines.append(f"\n{html.escape(s['name'])}: {s['trades']} сделок\nРезультат {s['return_pct']:+.2f}% · просадка {s['max_drawdown_pct']:.2f}%")
-        lines.append("\nЭто модель исполнения. Демо-результаты не оценивают прибыльность рынка.")
-        self.send("\n".join(lines))
+    def stats(self,message_id=None):
+        state=self.engine.state();lines=["<b>📊 Статистика сочетаний фильтров</b>"]
+        for c in state["dashboard"]["comparisons"]:
+            if not c["current"]:continue
+            stat=c["stats"];names=" + ".join(c["filters"]) or "Без дополнительных фильтров"
+            lines.append("\n<b>"+html.escape(c["name"])+"</b>\n"+html.escape(names[:700])
+                         +f"\nПроверено ситуаций: {c['activity']['checked']} · допущено: {c['activity']['accepted']}"
+                         +f"\nЗакрыто сделок: {stat['trades']} · удачных: {stat['wins']}"
+                         +f"\nИтог закрытых: {c['realized_pnl']:+.2f} USDT"
+                         +f"\nРезультат счёта: {stat['return_pct']:+.2f}% · просадка: {stat['max_drawdown_pct']:.2f}%"
+                         +"\n"+html.escape(c["sample_note"]))
+        lines.append("\nНаборы текущей серии наблюдаются параллельно. Их результаты не складываются. Подробности по монетам и архив серий — в веб-дашборде.")
+        return self.info_screen("\n".join(lines),message_id)
+
+    def info_screen(self,text,message_id=None):
+        v=hashlib.sha256(self.engine.generation.encode()).hexdigest()[:8]
+        payload={"chat_id":self.chat_id,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":[[{"text":"🏠 Главная","callback_data":f"{v}:home"}]]}}
+        if message_id:payload["message_id"]=message_id
+        return self.call("editMessageText" if message_id else "sendMessage",payload)
+
+    def coins(self,message_id=None):
+        d=self.engine.state()["dashboard"];lines=["<b>🪙 Просматриваемые монеты</b>"]
+        for c in d["coins"]:
+            stamp=time.strftime("%d.%m %H:%M UTC",time.gmtime(c["last_analysis"]/1000)) if c["last_analysis"] else "ещё не проверена"
+            lines.append("\n<b>"+html.escape(c["symbol"])+"</b> · "+html.escape(c["status"])+"\nПоследний анализ: "+stamp+f"\nНайдено ситуаций: {c['activity']['candidates']}")
+        return self.info_screen("\n".join(lines),message_id)
 
     def handle(self,u):
         cb=u.get("callback_query");m=(cb or {}).get("message") or u.get("message",{})
@@ -77,15 +113,21 @@ class Telegram:
             if bits[1]=="f" and len(bits)==4 and bits[2] in FILTERS:
                 key=bits[2];c["filters"][key]={"on":"off","off":"observe","observe":"on"}[c["filters"][key]]
                 self.engine.update_config(c);page=int(bits[3])
-            elif bits[1]=="pause":c["paused"]=not c["paused"];self.engine.update_config(c)
-            elif bits[1]=="stats":self.stats();return
+            elif bits[1]=="pause":
+                c["paused"]=not c["paused"];self.engine.update_config(c);self.menu(-1,m["message_id"]);return
+            elif bits[1]=="stats":self.stats(m["message_id"]);return
+            elif bits[1]=="coins":self.coins(m["message_id"]);return
+            elif bits[1]=="home":self.menu(-1,m["message_id"]);return
             elif bits[1]=="page" and len(bits)==3:page=int(bits[2])
             return self.menu(page,m["message_id"])
         if m.get("from",{}).get("id")!=self.chat_id:return
         words=m.get("text","").strip().split()
         if not words:return
         command=words[0].split("@")[0]
-        if command in ("/start","/menu","/filters"):self.menu()
+        if command in ("/start","/menu"):self.menu()
+        elif command=="/filters":self.menu(0)
+        elif command=="/coins":self.coins()
+        elif command=="/combinations":self.stats()
         elif command=="/stats":self.stats()
         elif command=="/setups":self.send("<b>Сценарии</b>\n"+"\n".join(f"{'🟢' if k in self.engine.config['setups'] else '⚫'} {k}: {v}" for k,v in SETUPS.items())+"\n\nВключить сценарий: <code>/setup pullback on</code>")
         elif command in ("/filter","/setup") and len(words)==3:
@@ -103,7 +145,7 @@ class Telegram:
             c=next((c for c in self.engine.store.recent_candidates(200) if c["symbol"]==symbol),None)
             image=price_chart(self.engine.store.candles(symbol),c,self.engine.demo)
             self.call("sendPhoto",{"chat_id":self.chat_id,"caption":symbol+" · PAPER · закрытые свечи"},photo=image)
-        else:self.send("<b>Команды</b>\n/start — меню\n/filters — переключатели\n/filter ema observe — режим фильтра\n/setups — сценарии\n/setup breakout on — включить сценарий\n/pause · /resume\n/stats — сравнение\n/chart BTCUSDT — график\n\nПараметры и CSV доступны в веб-дашборде.")
+        else:self.send("<b>Команды</b>\n/start — меню\n/filters — переключатели\n/filter ema observe — режим фильтра\n/setups — сценарии\n/setup breakout on — включить сценарий\n/pause · /resume\n/stats — статистика наборов\n/combinations — сочетания фильтров\n/coins — просматриваемые монеты\n/chart BTCUSDT — график\n\nПараметры и CSV доступны в веб-дашборде.")
 
     def notify(self,alert):
         if alert["kind"]=="candidate":
