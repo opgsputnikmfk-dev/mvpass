@@ -1,8 +1,8 @@
+.env
+.venv/
+.data/
 __pycache__/
 *.pyc
-.env
-.env.*
-data*/
-*.sqlite3*
-*.db*
-*.log
+*.sqlite*
+reports/
+datasets/
