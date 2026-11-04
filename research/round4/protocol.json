@@ -1,0 +1,68 @@
+{
+  "round": 4,
+  "registered": "2026-11-04",
+  "candidates": [
+    [
+      "shock_momentum",
+      1.5
+    ],
+    [
+      "shock_momentum",
+      2.0
+    ],
+    [
+      "shock_reversal",
+      1.5
+    ],
+    [
+      "shock_reversal",
+      2.0
+    ]
+  ],
+  "development": [
+    "2024-01-01",
+    "2024-04-01"
+  ],
+  "selection": [
+    "2024-04-01",
+    "2024-07-01"
+  ],
+  "holdout": [
+    [
+      "2024-07-01",
+      "2024-10-01"
+    ],
+    [
+      "2024-10-01",
+      "2024-12-01"
+    ]
+  ],
+  "warmup": "2023-12",
+  "source": "https://doi.org/10.1007/s11408-020-00357-1",
+  "hypothesis": "Trade continuation or reversal after a fully completed abnormal UTC day. Daily open-to-close log return, z-score relative to prior 20 daily returns (mean/std ddof=0, both shifted). Absolute z>=1.5 or >=2.0; side uses sign of actual daily return. One entry attempt at next day 00:01 UTC; stop 2 completed-hour ATR, no target, timeout 23h. Not paper replication; no symbol-specific sign rules.",
+  "selection_rule": "Require positive development AND selection, >=30 selection trades, selection PF>=1.15 and DD<8%; highest selection PF wins; listed order breaks ties. Otherwise reject without opening holdout.",
+  "admission": "Both independent periods positive, PF>=1.15 DD<8%; >=100 trades combined; both periods positive with adverse execution doubled to 9bps per side and both threshold neighbors +/-10%. No retuning or candidate switching. Prospective observation still required.",
+  "costs": {
+    "fee_per_side_bps": 5.5,
+    "adverse_execution_per_side_bps": 4.5,
+    "stress_execution_bps": 9.0
+  },
+  "risk": {
+    "initial_equity": 10000,
+    "risk_per_trade": 0.0025,
+    "total_risk": 0.0075,
+    "same_direction_risk": 0.0035,
+    "max_positions": 3,
+    "max_same_direction": 2,
+    "position_notional_fraction": 0.25,
+    "gross_notional_fraction": 1.0,
+    "daily_loss_stop": 0.02,
+    "drawdown_stop": 0.08
+  },
+  "independence": "Jan-Jun2024 already inspected in round3: screening only. Jul-Nov2024 never loaded in prior rounds; reserved. Paper sample ends Sep2019. Dec2023 warmup.",
+  "limitations": [
+    "Original study spot assets/venues and different rule design; no transfer assumed.",
+    "BTC ETH SOL survivor universe, fixed slippage instead of bid/ask, minute stop-first and funding mark-open proxy.",
+    "Repeated searching, small event counts, no statistical significance inferred from PnL."
+  ]
+}
