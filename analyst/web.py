@@ -63,6 +63,18 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
             try:
                 if path=="/":return self.respond(200,(static/"index.html").read_bytes(),"text/html; charset=utf-8")
                 if path=="/api/state":return self.json(200,{**engine.state(),"filter_names":FILTERS,"setup_names":SETUPS,"user":{"username":username,"role":records[username]["role"] if auth else "admin","telegram_linked":username=="Admin"}})
+                if path in ("/api/position", "/api/position-chart"):
+                    from .valuation import position_view
+                    key=q.get("account",[""])[0];pid=q.get("id",[""])[0]
+                    with engine.lock:
+                        account=engine.accounts.get(key)
+                        position=account.positions.get(pid) if account else None
+                        if position is None:return self.json(404,{"error":"Открытая сделка не найдена в вашем аккаунте"})
+                        p=position_view(position,account,engine.live_prices,int(time.time()*1000))
+                        candidate=engine.store.candidate(position.candidate_id)
+                    if path=="/api/position":return self.json(200,{"position":p,"candidate":candidate,"account":key})
+                    chart={**(candidate or {}),"symbol":p["symbol"],"side":p["side"],"setup":p["setup"],"reference":p["entry"],"stop":p["stop"],"target":p["target"],"levels":(candidate or {}).get("levels",{}),"entry_ts":p["entry_ts"],"current_price":p["current_price"],"live_position":True}
+                    return self.respond(200,price_chart(engine.store.candles(p["symbol"]),chart,engine.demo,source="Binance Spot reference" if engine.config["exchange"]=="binance" else "Bybit perpetual"),"image/png")
                 if path=="/api/chart":
                     cid=q.get("candidate",[None])[0];c=engine.store.candidate(cid) if cid else None
                     if cid and not c:return self.json(404,{"error":"Сигнал не найден"})

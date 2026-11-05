@@ -39,6 +39,15 @@ class ProfileTests(unittest.TestCase):
                 self.assertFalse(json.load(request('/api/state',cookie=cs))['candidates'])
                 with self.assertRaises(urllib.error.HTTPError):request('/api/chart?candidate=private',cookie=cs)
                 with self.assertRaises(urllib.error.HTTPError):request('/api/export?account=unknown',cookie=cs)
+                from analyst.models import Position
+                key=a.generation+':active'
+                a.accounts[key].positions['owned']=Position('owned','private','BTCUSDT',1,60000,100,98,98,104,1,2,.055,'test',a.config['risk'])
+                detail=json.load(request('/api/position?account='+key+'&id=owned',cookie=ca))
+                self.assertEqual(detail['position']['entry'],100)
+                self.assertEqual(detail['candidate']['id'],'private')
+                for endpoint in ('/api/position','/api/position-chart'):
+                    with self.assertRaises(urllib.error.HTTPError) as denied:request(endpoint+'?account='+key+'&id=owned',cookie=cs)
+                    self.assertEqual(denied.exception.code,404)
                 request('/api/logout',{},cs)
                 with self.assertRaises(urllib.error.HTTPError):request('/api/state',cookie=cs)
                 self.assertEqual(json.load(request('/api/state',cookie=ca))['user']['telegram_linked'],True)

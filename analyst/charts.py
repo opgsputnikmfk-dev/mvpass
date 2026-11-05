@@ -15,8 +15,11 @@ _lock=threading.Lock()
 def price_chart(candles,candidate=None,synthetic=False,source="PAPER"):
     with _lock,plt.rc_context({"font.family":"DejaVu Sans","font.size":10}):
         d=aggregate(candles,5)
-        if candidate:d=d[d.close_ts<=candidate["ts"]]
-        d=d.tail(100).reset_index(drop=True)
+        if candidate and not candidate.get("live_position"):d=d[d.close_ts<=candidate["ts"]]
+        if candidate and candidate.get("live_position"):
+            start=candidate["entry_ts"]-30*5*60000
+            d=d[d.close_ts>=start]
+        d=d.tail(600 if candidate and candidate.get("live_position") else 100).reset_index(drop=True)
         if d.empty:raise ValueError("Нет свечей для графика")
         fig,(ax,vol)=plt.subplots(2,1,figsize=(12,7),sharex=True,gridspec_kw={"height_ratios":[4,1]},facecolor="#111315")
         for axis in (ax,vol):
@@ -28,8 +31,13 @@ def price_chart(candles,candidate=None,synthetic=False,source="PAPER"):
             ax.add_patch(Rectangle((i-.32,min(r.open,r.close)),.64,max(abs(r.close-r.open),r.close*.00001),facecolor=color))
             vol.bar(i,r.volume,color=color,width=.64)
         if candidate:
-            for key,col,label in [("reference","#b2b8bb","Signal reference"),("stop","#ff7b85","Stop"),("target","#8aefbb","Target")]:
+            for key,col,label in [("reference","#b2b8bb","Entry / TVH"),("stop","#ff7b85","SL / Stop"),("target","#8aefbb","TP / Target")]:
                 ax.axhline(candidate[key],color=col,linewidth=1,label=f"{label} {candidate[key]:.7g}")
+            if candidate.get("live_position"):
+                price=candidate.get("current_price")
+                if price:ax.axhline(price,color="#80caff",ls="--",label=f"Current {price:.7g}")
+                idx=np.searchsorted(d.close_ts.to_numpy(),candidate["entry_ts"])
+                if idx<len(d):ax.axvline(idx,color="#b2b8bb",ls=":",label="Entry time")
             for key in ("support","resistance"):
                 v=candidate["levels"].get(key)
                 if v:ax.axhline(v,color="#c3c8cb",alpha=.65,ls="--",label=key.title())

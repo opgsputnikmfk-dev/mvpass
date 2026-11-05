@@ -2,6 +2,7 @@
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=(x,d=2)=>x==null?'—':Number(x).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});
 const dt=x=>x?new Date(x).toLocaleString('ru-RU',{timeZone:'UTC'})+' UTC':'—';
+let openPosition=null;
 let state=null,draft=null,dirty=false,tab='overview',chartPeriod='all';
 async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Requested-With':'Analyst','X-Account':state?.user?.username||''}:{},body:data?JSON.stringify(data):undefined});const result=await r.json();if(!r.ok)throw new Error(result.error||'Ошибка запроса');return result;}
 function error(e){$('#error').textContent=e.message;$('#error').classList.remove('hidden');}
@@ -15,10 +16,11 @@ else{
  $('#refresh').onclick=refresh;$('#pause').onclick=async()=>{try{await api('/api/pause',{});dirty=false;await refresh();}catch(e){error(e);}};
  $('#save-filters').onclick=()=>save(draft);$('#save-json').onclick=()=>{try{save(JSON.parse($('#config-json').value));}catch(e){error(e);}};
  $('#config-json').addEventListener('input',()=>{dirty=true;try{draft=JSON.parse($('#config-json').value);}catch(e){/* Save reports invalid JSON without discarding the draft. */}});
- $('#close-detail').onclick=()=>$('#detail').close();refresh();setInterval(refresh,15000);
+ $('#close-detail').onclick=()=>{openPosition=null;$('#detail').close();};
+ document.addEventListener('click',e=>{const b=e.target.closest('[data-position]')||e.target.closest('tr')?.querySelector('[data-position]');if(b)positionDetails(b.dataset.account,b.dataset.position);});refresh();setInterval(refresh,15000);
 }
 async function save(c){try{await api('/api/config',c);dirty=false;await refresh();}catch(e){error(e);}}
-async function refresh(){try{const next=await api('/api/state');if(state?.user?.username!==next.user?.username){dirty=false;draft=null;}state=next;$('#error').classList.add('hidden');if(!dirty){draft=structuredClone(state.config);$('#config-json').value=JSON.stringify(draft,null,2);}render();}catch(e){error(e);}}
+async function refresh(){try{const next=await api('/api/state');if(state?.user?.username!==next.user?.username){dirty=false;draft=null;}state=next;$('#error').classList.add('hidden');if(!dirty){draft=structuredClone(state.config);$('#config-json').value=JSON.stringify(draft,null,2);}render();if(openPosition&&$('#detail').open)positionDetails(openPosition.account,openPosition.id,true);}catch(e){error(e);}}
 function table(headers,rows){return rows.length?'<table><thead><tr>'+headers.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>':'<div class="empty">Пока нет данных для этой серии.</div>';}
 function render(){
  $('#identity').textContent=state.user.username+' · '+(state.user.telegram_linked?'Администратор · Telegram':'Личный аккаунт · без Telegram');
@@ -84,7 +86,7 @@ function renderReport(){
 function positionsTable(positions){
  const money=x=>x==null?'—':(x>0?'+':'')+n(x);
  return table(['Монета','Сторона','Вход · ТВХ','Цена сейчас','PnL USDT ≈','PnL % ≈','SL · Стоп','TP · Цель','Время цены'],positions.map(p=>[
-  esc(p.symbol),p.side===1?'На рост · LONG':'На падение · SHORT',n(p.entry,6),n(p.current_price,6),
+  '<button class="button secondary" data-position="'+esc(p.id)+'" data-account="'+esc(Object.keys(state.accounts).find(k=>(state.accounts[k].positions||[]).some(x=>x.id===p.id&&x.config_version===p.config_version))||'')+'">'+esc(p.symbol)+' ↗</button>',p.side===1?'На рост · LONG':'На падение · SHORT',n(p.entry,6),n(p.current_price,6),
   '<span class="'+(p.estimated_pnl==null?'muted':p.estimated_pnl>=0?'positive':'negative')+'">'+money(p.estimated_pnl)+'</span>',money(p.estimated_pnl_pct)+'%',
   n(p.stop,6),n(p.target,6),'<span class="'+(p.price_stale?'negative':'muted')+'">'+esc(dt(p.price_ts))+(p.price_kind==='minute_close'?' · свеча':'')+(p.price_stale?' · устарела':'')+'</span>'
  ]));
@@ -114,4 +116,16 @@ function renderOverview(positions){
  const labels={on:'Включён',observe:'Наблюдение',off:'Выключен'};
  const chosen=Object.entries(state.config.filters).filter(([,v])=>v==='on');
  $('#filter-summary').innerHTML=(chosen.length?chosen.slice(0,5):Object.entries(state.config.filters).slice(0,5)).map(([k,v])=>'<div class="filter-summary-row"><span>'+esc(state.filter_names[k])+'</span><span class="mini-mode '+v+'" aria-label="'+labels[v]+'">'+(v==='on'?'●':v==='observe'?'◐':'○')+'</span></div>').join('')+'<p class="small muted">Включено '+chosen.length+' из '+Object.keys(state.config.filters).length+'. Изменить режимы можно в разделе «Фильтры».</p>';
+}
+
+async function positionDetails(account,id,updating=false){
+ openPosition={account,id};
+ if(!updating){$('#detail-body').innerHTML='<p>Загружаем подробности сделки…</p>';if(!$('#detail').open)$('#detail').showModal();}
+ try{
+ const data=await api('/api/position?account='+encodeURIComponent(account)+'&id='+encodeURIComponent(id));
+ if(openPosition?.id!==id||openPosition?.account!==account)return;
+ const p=data.position,c=data.candidate,r=p.rules,price=p.current_price;
+ const rows=[['Статус','Открыта · учебная'],['Сценарий',state.setup_names[p.setup]||p.setup],['Вход UTC',dt(p.entry_ts)],['Время в сделке',n((Date.now()-p.entry_ts)/60000,1)+' мин'],['Объём монет',n(p.qty,8)],['Сумма входа',n(p.qty*p.entry)+' USDT'],['Запланированный риск',n(p.planned_risk)+' USDT'],['Текущий результат R',n(p.estimated_pnl==null?null:p.estimated_pnl/p.planned_risk,3)],['PnL до расходов',n(p.unrealized_gross)+' USDT'],['PnL после расходов ≈',n(p.estimated_pnl)+' USDT · '+n(p.estimated_pnl_pct)+'%'],['Комиссия входа',n(p.entry_fee,4)+' USDT'],['Ставка комиссии',n(r.fee_rate*100,3)+'%'],['Проскальзывание модели',n(r.slippage_bps,1)+' bps'],['Funding',state.config.market==='spot_reference'?'Не применяется для спотового источника':n(p.funding_paid,4)+' USDT'],['Первоначальный SL',n(p.initial_stop,8)],['До SL от текущей цены',price==null?'—':n(Math.abs(price-p.stop)/price*100,3)+'%'],['До TP от текущей цены',price==null?'—':n(Math.abs(price-p.target)/price*100,3)+'%'],['Лимит времени',n(r.max_hold_minutes,0)+' мин'],['Котировка',dt(p.price_ts)+' · '+(p.price_kind||'—')+(p.price_stale?' · УСТАРЕЛА':'')],['Серия',account],['ID сделки',p.id]];
+ $('#detail-body').innerHTML='<h2>'+esc(p.symbol)+' · '+(p.side===1?'LONG':'SHORT')+'</h2><p class="muted">Учебная позиция · данные обновляются каждые 15 секунд. График по завершённым свечам 5м, время UTC.</p><div class="signal-levels"><div><small>Фактический вход · ТВХ</small><strong>'+n(p.entry,8)+'</strong></div><div class="target"><small>TP · Цель</small><strong>'+n(p.target,8)+'</strong></div><div><small>SL · Стоп</small><strong>'+n(p.stop,8)+'</strong></div></div><p>Цена сейчас: '+n(price,8)+' · PnL ≈ <b class="'+(p.estimated_pnl>=0?'positive':'negative')+'">'+n(p.estimated_pnl)+' USDT</b></p><img src="/api/position-chart?account='+encodeURIComponent(account)+'&id='+encodeURIComponent(id)+'&t='+Date.now()+'" alt="Свечной график сделки с уровнями входа, TP, SL и текущей цены"><div class="scroll">'+table(['Параметр','Значение'],rows.map(row=>row.map(esc)))+'</div><h3>Условия в момент сигнала</h3>'+(c?'<p>'+esc(c.explanation)+'</p><div class="scroll">'+table(['Фильтр','Результат','Значение','Объяснение'],Object.entries(c.checks).map(([k,ch])=>[esc(state.filter_names[k]||k),ch.passed==null?'Нет данных':ch.passed?'Пройден':'Не пройден',esc(JSON.stringify(ch.value)),esc(ch.detail)]))+'</div>':'<p>Исходный разбор сигнала недоступен. Уровни и параметры исполнения сохранены.</p>');
+ }catch(e){if(!updating)$('#detail-body').textContent=e.message;}
 }
