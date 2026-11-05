@@ -115,7 +115,7 @@ class Engine:
             from .dashboard import report
             from .valuation import position_view
             now=int(time.time()*1000)
-            return {"app":"AI Crypto Analyst","version":"4.4.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            return {"app":"AI Crypto Analyst","version":"5.0.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
                     "quote_error":self.quote_error,
                     "data_source":("Binance Spot · ориентиры LONG/SHORT" if self.config["exchange"]=="binance" else "Bybit USDT perpetual"),
                     "dashboard":report(self),
