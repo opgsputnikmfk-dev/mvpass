@@ -3,21 +3,23 @@ const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=
 const n=(x,d=2)=>x==null?'—':Number(x).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});
 const dt=x=>x?new Date(x).toLocaleString('ru-RU',{timeZone:'UTC'})+' UTC':'—';
 let state=null,draft=null,dirty=false,tab='overview';
-async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Requested-With':'Analyst'}:{},body:data?JSON.stringify(data):undefined});const result=await r.json();if(!r.ok)throw new Error(result.error||'Ошибка запроса');return result;}
+async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Requested-With':'Analyst','X-Account':state?.user?.username||''}:{},body:data?JSON.stringify(data):undefined});const result=await r.json();if(!r.ok)throw new Error(result.error||'Ошибка запроса');return result;}
 function error(e){$('#error').textContent=e.message;$('#error').classList.remove('hidden');}
 const login=$('#login');
-if(login){login.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/login',{password:$('#password').value});location.reload();}catch(e){error(e);}});}
+if(login){login.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/login',{username:$('#username').value,password:$('#password').value});location.reload();}catch(e){error(e);}});}
 else{
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{tab=b.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==tab));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x===b));$('#page-title').textContent=b.textContent;}));
+ $('#logout').onclick=async()=>{await api('/api/logout',{});location.reload();};
  $('#refresh').onclick=refresh;$('#pause').onclick=async()=>{try{await api('/api/pause',{});dirty=false;await refresh();}catch(e){error(e);}};
  $('#save-filters').onclick=()=>save(draft);$('#save-json').onclick=()=>{try{save(JSON.parse($('#config-json').value));}catch(e){error(e);}};
  $('#config-json').addEventListener('input',()=>{dirty=true;try{draft=JSON.parse($('#config-json').value);}catch(e){/* Save reports invalid JSON without discarding the draft. */}});
  $('#close-detail').onclick=()=>$('#detail').close();refresh();setInterval(refresh,15000);
 }
 async function save(c){try{await api('/api/config',c);dirty=false;await refresh();}catch(e){error(e);}}
-async function refresh(){try{state=await api('/api/state');$('#error').classList.add('hidden');if(!dirty){draft=structuredClone(state.config);$('#config-json').value=JSON.stringify(draft,null,2);}render();}catch(e){error(e);}}
+async function refresh(){try{const next=await api('/api/state');if(state?.user?.username!==next.user?.username){dirty=false;draft=null;}state=next;$('#error').classList.add('hidden');if(!dirty){draft=structuredClone(state.config);$('#config-json').value=JSON.stringify(draft,null,2);}render();}catch(e){error(e);}}
 function table(headers,rows){return rows.length?'<table><thead><tr>'+headers.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>':'<div class="empty">Пока нет данных для этой серии.</div>';}
 function render(){
+ $('#identity').textContent=state.user.username+' · '+(state.user.telegram_linked?'Администратор · Telegram':'Личный аккаунт · без Telegram');
  const key=state.generation+':active',a=state.accounts[key],s=a?.stats||{};
  $('#status').textContent=state.dashboard?.status_label||state.status;$('#pause').textContent=state.config.paused?'Продолжить':'Пауза';
  $('#notice').textContent=state.mode==='SYNTHETIC_DEMO'?'ДЕМОНСТРАЦИЯ · Искусственные свечи для проверки программы. Эти результаты не показывают доходность на рынке.':'PAPER · Все сделки учебные. Расчёт использует модель исполнения; преимущество стратегии пока не подтверждено.';

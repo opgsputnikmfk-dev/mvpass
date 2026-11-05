@@ -11,7 +11,9 @@ def report(engine):
     with store.lock:
         totals={s:{"candidates":int(n),"last_candidate":t} for s,n,t in store.db.execute("SELECT symbol,count(*),max(ts) FROM candidates GROUP BY symbol")}
         decisions={a:{"checked":int(n),"accepted":int(ok or 0),"start":t,"end":end} for a,n,ok,t,end in store.db.execute("SELECT d.account,count(*),sum(d.accepted),min(c.ts),max(c.ts) FROM decisions d JOIN candidates c ON c.id=d.candidate_id GROUP BY d.account")}
-        cache={s:{"candles":int(n),"last_candle":t+60000} for s,n,t in store.db.execute("SELECT symbol,count(*),max(ts) FROM candles GROUP BY symbol")}
+    feed=store.market_store or store
+    with feed.lock:
+        cache={s:{"candles":int(n),"last_candle":t+60000} for s,n,t in feed.db.execute("SELECT symbol,count(*),max(ts) FROM candles GROUP BY symbol")}
     comparisons=[];groups={};attribution={k:{"pass":{"n":0,"sum_r":0},"fail":{"n":0,"sum_r":0},"missing":{"n":0,"sum_r":0}} for k in FILTERS}
     for key,a in engine.accounts.items():
         group=key.rsplit(":",1)[0];groups.setdefault(group,len(groups)+1)

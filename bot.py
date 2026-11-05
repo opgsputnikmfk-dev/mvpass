@@ -19,7 +19,7 @@ def load_env():
         if not line or line.startswith("#"):continue
         if "=" not in line:raise ValueError("Строка .env должна иметь вид KEY=value")
         k,v=line.split("=",1)
-        if k.strip() not in ("TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","DASHBOARD_PASSWORD","PUBLIC_ORIGIN","PORT","DATA_DIR"):continue
+        if k.strip() not in ("TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","DASHBOARD_PASSWORD","DASHBOARD_USERS_JSON","PUBLIC_ORIGIN","PORT","DATA_DIR"):continue
         os.environ.setdefault(k.strip(),v.strip().strip('"').strip("'"))
 
 def utc(s):
@@ -94,10 +94,19 @@ def main():
         save_report(result,root/"demo_report")
     engine=Engine(store,cfg,demo)
     if not demo and args.config is None:engine.enable_top20()
-    server=make_server(engine,args.host,args.port)
+    from analyst.auth import load_users
+    from analyst.profiles import EngineProfiles
+    records=load_users(os.getenv("DASHBOARD_USERS_JSON",""))
+    profiles={"Admin":engine}
+    for username in records:
+        if username=="Admin":continue
+        userroot=root/"users"/username.lower();userroot.mkdir(parents=True,exist_ok=True)
+        profiles[username]=Engine(Store(userroot/"paper.sqlite",market_store=store),copy.deepcopy(engine.config),demo)
+    runner=EngineProfiles(profiles)
+    server=make_server(engine,args.host,args.port,profiles=profiles,auth_records=records)
     threads=[]
-    if not demo:threads.append(threading.Thread(target=engine.run,daemon=True,name="scanner"))
-    if not demo:threads.append(threading.Thread(target=engine.quote_loop,daemon=True,name="position-quotes"))
+    if not demo:threads.append(threading.Thread(target=runner.run,daemon=True,name="scanner"))
+    if not demo:threads.append(threading.Thread(target=runner.quote_loop,daemon=True,name="position-quotes"))
     if args.telegram:
         from analyst.telegram import Telegram
         telegram=Telegram(engine);threads.append(threading.Thread(target=telegram.run,daemon=True,name="telegram"))

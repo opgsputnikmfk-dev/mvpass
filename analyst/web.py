@@ -11,10 +11,16 @@ from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
 from pathlib import Path
 from .config import FILTERS,SETUPS
 from .charts import price_chart
+from .auth import NamedAuth,load_users
 
-def make_server(engine,host="127.0.0.1",port=8765):
+def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=None):
+    admin_engine=engine
+    records=load_users(os.getenv("DASHBOARD_USERS_JSON","")) if auth_records is None else auth_records
+    auth=NamedAuth(records) if records else None
+    profiles=profiles or {"Admin":engine}
+    if auth and set(records)!=set(profiles):raise ValueError("Accounts and profiles must match")
     password=os.getenv("DASHBOARD_PASSWORD","")
-    if host not in ("127.0.0.1","localhost","::1") and len(password)<16:
+    if host not in ("127.0.0.1","localhost","::1") and not auth and len(password)<16:
         raise ValueError("Для внешнего доступа задайте DASHBOARD_PASSWORD длиной ≥16 символов")
     origin=os.getenv("PUBLIC_ORIGIN","").rstrip("/")
     allowed_hosts={"localhost","127.0.0.1","::1",host}
@@ -35,24 +41,31 @@ def make_server(engine,host="127.0.0.1",port=8765):
         def valid_host(self):
             try:return urllib.parse.urlsplit("http://"+self.headers.get("Host","")).hostname in allowed_hosts
             except ValueError:return False
-        def authenticated(self):
-            if not password:return True
+        def token(self):
             cookies=dict(p.strip().split("=",1) for p in self.headers.get("Cookie","").split(";") if "=" in p)
-            return sessions.get(cookies.get("analyst_session",""),0)>time.time()
+            return cookies.get("analyst_session","")
+        def identity(self):
+            if not auth and not password:return "Admin"
+            session=sessions.get(self.token())
+            return session[0] if session and session[1]>time.time() else None
+        def authenticated(self):return self.identity() is not None
         def do_GET(self):
             if not self.valid_host():return self.json(403,{"error":"Invalid host"})
             u=urllib.parse.urlsplit(self.path);path=u.path;q=urllib.parse.parse_qs(u.query)
-            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"4.4.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
+            engine=admin_engine
+            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"5.0.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
             if path in ("/style.css","/app.js"):
                 return self.respond(200,(static/path[1:]).read_bytes(),"text/css" if path.endswith("css") else "text/javascript")
             if not self.authenticated():
                 if path=="/":return self.respond(200,(static/"login.html").read_bytes(),"text/html; charset=utf-8")
                 return self.json(401,{"error":"Войдите в дашборд"})
+            username=self.identity();engine=profiles[username]
             try:
                 if path=="/":return self.respond(200,(static/"index.html").read_bytes(),"text/html; charset=utf-8")
-                if path=="/api/state":return self.json(200,{**engine.state(),"filter_names":FILTERS,"setup_names":SETUPS})
+                if path=="/api/state":return self.json(200,{**engine.state(),"filter_names":FILTERS,"setup_names":SETUPS,"user":{"username":username,"role":records[username]["role"] if auth else "admin","telegram_linked":username=="Admin"}})
                 if path=="/api/chart":
                     cid=q.get("candidate",[None])[0];c=engine.store.candidate(cid) if cid else None
+                    if cid and not c:return self.json(404,{"error":"Сигнал не найден"})
                     symbol=c["symbol"] if c else q.get("symbol",[engine.config["symbols"][0]])[0]
                     if symbol not in engine.config["symbols"]:return self.json(404,{"error":"Символ не найден"})
                     df=engine.store.candles(symbol)
@@ -86,17 +99,25 @@ def make_server(engine,host="127.0.0.1",port=8765):
                 if not 0<n<=100000:return self.json(413,{"error":"Body too large"})
                 data=json.loads(self.rfile.read(n))
             except (ValueError,TypeError):return self.json(400,{"error":"Invalid JSON"})
+            if not isinstance(data,dict):return self.json(400,{"error":"Ожидался JSON объект"})
             if self.path=="/api/login":
                 ip=self.client_address[0];recent=[t for t in failures.get(ip,[]) if t>time.time()-60]
                 if len(recent)>=5:return self.json(429,{"error":"Повторите через минуту"})
-                if not isinstance(data.get("password"),str) or not hmac.compare_digest(data["password"].encode(),password.encode()):
-                    failures[ip]=recent+[time.time()];return self.json(401,{"error":"Неверный пароль"})
-                token=secrets.token_urlsafe(32);sessions[token]=time.time()+8*3600
-                for key,expiry in list(sessions.items()):
-                    if expiry<time.time():sessions.pop(key,None)
+                username=auth.authenticate(data.get("username"),data.get("password")) if auth else ("Admin" if isinstance(data.get("password"),str) and hmac.compare_digest(data["password"].encode(),password.encode()) else None)
+                if username is None:
+                    failures[ip]=recent+[time.time()];return self.json(401,{"error":"Неверный логин или пароль"})
+                sessions.pop(self.token(),None)
+                token=secrets.token_urlsafe(32);sessions[token]=(username,time.time()+8*3600)
+                for key,session in list(sessions.items()):
+                    if session[1]<time.time():sessions.pop(key,None)
                 cookie=f"analyst_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"+("; Secure" if origin.startswith("https://") else "")
                 return self.respond(200,'{"ok":true}',cookie=cookie)
             if not self.authenticated():return self.json(401,{"error":"Требуется вход"})
+            username=self.identity();engine=profiles[username]
+            if self.path=="/api/logout":
+                sessions.pop(self.token(),None)
+                return self.respond(200,'{"ok":true}',cookie="analyst_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
+            if auth and self.headers.get("X-Account")!=username:return self.json(409,{"error":"Аккаунт изменился. Обновите страницу перед сохранением."})
             try:
                 if self.path=="/api/config":return self.json(200,{"version":engine.update_config(data)})
                 if self.path=="/api/pause":

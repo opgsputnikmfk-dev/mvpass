@@ -10,8 +10,9 @@ from .config import validate, version
 def dumps(value):return json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(",", ":"))
 
 class Store:
-    def __init__(self,path):
+    def __init__(self,path,market_store=None):
         Path(path).parent.mkdir(parents=True,exist_ok=True)
+        self.market_store=market_store
         self.lock=threading.RLock();self.db=sqlite3.connect(str(path),check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL");self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript('''
@@ -59,6 +60,7 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES('engine',?)",(dumps(state),))
 
     def candles(self,symbol):
+        if self.market_store is not None:return self.market_store.candles(symbol)
         with self.lock:return pd.read_sql_query("SELECT ts,open,high,low,close,volume FROM candles WHERE symbol=? ORDER BY ts",self.db,params=(symbol,))
 
     def add_candles(self,symbol,df):

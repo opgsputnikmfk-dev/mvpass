@@ -14,16 +14,16 @@
     "PEPEUSDT",
     "UNIUSDT",
     "TRUMPUSDT",
-    "SUIUSDT",
     "HYPEUSDT",
+    "SUIUSDT",
     "DOGEUSDT",
     "ENAUSDT",
     "TRXUSDT",
-    "WLDUSDT",
     "LINKUSDT",
+    "WLDUSDT",
     "MUBUSDT",
-    "RWUSDUSDT",
-    "AAVEUSDT"
+    "AAVEUSDT",
+    "ADAUSDT"
   ],
   "setups": [
     "pullback",

@@ -30,7 +30,7 @@ class Engine:
         self.activate()
         self.universe=store.get("universe_selection",{"mode":"manual","verified":False})
         self.manage_universe=False
-        self.live_prices={};self.quote_error=None
+        self.live_prices={};self.quote_error=None;self.notifications_enabled=True
 
     def refresh_quotes(self):
         with self.lock:symbols={p.symbol for a in self.accounts.values() for p in a.positions.values()}
@@ -127,12 +127,18 @@ class Engine:
 
     def cycle(self):
         self.refresh_top20()
+        with self.lock:generation=self.generation
+        bundle=self.collect_market()
+        self.apply_market(bundle,expected_generation=generation)
+
+    def collect_market(self,symbols_override=None,last_override=None):
         # Network work is outside the engine lock; config captured and checked
         # before applying results, so UI requests stay responsive.
         with self.lock:cfg=copy.deepcopy(self.config);generation=self.generation;last=self.last_ts
+        if last_override is not None:last=last_override
         end=self.api.server_time()//MINUTE*MINUTE
         if abs(end-int(time.time()*1000))>120000:raise DataError("Часы сервера и биржи расходятся")
-        symbols=sorted(set(cfg["symbols"])|{"BTCUSDT"});candles={};snaps={};events={}
+        symbols=sorted(set(symbols_override or cfg["symbols"])|{"BTCUSDT"});candles={};snaps={};events={}
         metadata={};frames={}
         def load_symbol(symbol):
             cached=self.store.candles(symbol)
@@ -165,8 +171,15 @@ class Engine:
             for symbol in symbols:load_symbol(symbol)
         now=int(time.time()*1000)
         if now-end>cfg["scanner"]["max_data_age_seconds"]*1000:raise DataError("Загрузка заняла слишком долго; данные устарели")
+        return {"end":end,"now":now,"symbols":symbols,"candles":candles,"frames":frames,"metadata":metadata,"snaps":snaps,"events":events}
+
+    def apply_market(self,bundle,expected_generation=None):
+        end,now,symbols,candles,frames,metadata,snaps,events=(bundle[k] for k in ("end","now","symbols","candles","frames","metadata","snaps","events"))
         with self.lock:
-            if generation!=self.generation:return
+            if expected_generation is not None and expected_generation!=self.generation:return
+            cfg=copy.deepcopy(self.config)
+            if not set(cfg["symbols"]).issubset(frames):raise DataError("Ожидание данных нового списка монет")
+            if now-end>cfg["scanner"]["max_data_age_seconds"]*1000:raise DataError("Данные профиля устарели")
             before=self.dump();candidates=[];decisions=[];alerts=[]
             try:
                 start=self.last_ts+MINUTE if self.last_ts else end-MINUTE
@@ -178,7 +191,7 @@ class Engine:
                     for key,a in self.accounts.items():
                         a.funding_quality="not_applicable_spot_reference" if getattr(self.api,"spot_reference",False) else "historical_rates_mark_1m_approximation"
                         notes=a.step(ts,bars,metadata,funding)
-                        if key.endswith(":active"):
+                        if self.notifications_enabled and key.endswith(":active"):
                             alerts.extend({"kind":"execution","account":key,"event":note} for note in notes)
                     self.last_ts=ts
                 for symbol in cfg["symbols"]:
@@ -193,7 +206,7 @@ class Engine:
                             if cfg["paused"]:ok,reasons=False,["Сканер на паузе"]
                             else:ok,reasons=a.propose(c)
                             decisions.append((key,c.id,ok,reasons))
-                            if ok and name=="active":alerts.append({"kind":"candidate","candidate":c.to_dict(),"version":self.generation})
+                            if self.notifications_enabled and ok and name=="active":alerts.append({"kind":"candidate","candidate":c.to_dict(),"version":self.generation})
                 for s,snap in snaps.items():self.expected_funding[s]=snap["next_funding_ts"]
                 self.updated_at=now;self.status="PAUSED" if cfg["paused"] else "RUNNING"
                 self.store.commit_cycle(self.dump(),candidates,decisions,alerts)
