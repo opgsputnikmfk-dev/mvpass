@@ -19,7 +19,8 @@ class Engine:
     def __init__(self,store,config=None,demo=False):
         self.store=store;self.lock=threading.RLock();self.stop=threading.Event();self.demo=demo
         self.config=validate(store.get("config",config or DEFAULT));self.store.save_config(self.config)
-        self.api=Bybit();self.accounts={};self.market={};self.last_ts=0;self.last_analysis={};self.expected_funding={}
+        from .spot import BinanceSpot
+        self.api=BinanceSpot() if self.config["exchange"]=="binance" else Bybit();self.accounts={};self.market={};self.last_ts=0;self.last_analysis={};self.expected_funding={}
         self.status="DEMO" if demo else "STARTING";self.updated_at=0;self.frames={};self.metadata={};self.generation="";self.series_seq=0
         saved=store.get("engine")
         if saved:
@@ -48,14 +49,14 @@ class Engine:
         try:
             ranked,observed=fetch_top20(self.api,self.config["scanner"]["warmup_days"])
             if len(ranked)!=20:raise DataError("Для топ-20 не хватает подходящих торгуемых контрактов")
-            if abs(observed-now)>120000:raise DataError("Биржа вернула устаревший рейтинг")
+            if abs(observed-int(time.time()*1000))>120000:raise DataError("Биржа вернула устаревший рейтинг")
             symbols=[r["symbol"] for r in ranked]
             if set(symbols)!=set(self.config["symbols"]):
                 c=copy.deepcopy(self.config);c["symbols"]=symbols
                 self.update_config(c)
             self.universe={"mode":"top20","verified":True,"ranked_at":observed,
                            "next_attempt":now+86400000,"ranking":ranked,
-                           "label":"Топ-20 подходящих криптофьючерсов по обороту Bybit за 24 часа"}
+                           "label":("Топ-20 Binance Spot по обороту за 24 часа · спотовые ориентиры" if getattr(self.api,"spot_reference",False) else "Топ-20 подходящих криптофьючерсов по обороту Bybit за 24 часа")}
         except (DataError,ValueError) as e:
             label=("Последний сохранённый список из 20 монет; актуальный рейтинг недоступен"
                    if self.universe.get("ranked_at") else "Резервный список из 20 монет; рейтинг биржи недоступен")
@@ -77,6 +78,8 @@ class Engine:
 
     def update_config(self,c):
         c=validate(c)
+        if (c["exchange"],c["market"])!=(self.config["exchange"],self.config["market"]):
+            raise ValueError("Смена источника требует отдельного запуска и отдельной базы статистики")
         with self.lock:
             # Keep exchange/universe stable while older accounts have exposure.
             protected={p.symbol for a in self.accounts.values() for p in a.positions.values()}
@@ -95,7 +98,8 @@ class Engine:
     def state(self):
         with self.lock:
             from .dashboard import report
-            return {"app":"AI Crypto Analyst","version":"4.2.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            return {"app":"AI Crypto Analyst","version":"4.3.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+                    "data_source":("Binance Spot · ориентиры LONG/SHORT" if self.config["exchange"]=="binance" else "Bybit USDT perpetual"),
                     "dashboard":report(self),
                     "universe":copy.deepcopy(self.universe),
                     "status":self.status,"updated_at":self.updated_at,"generation":self.generation,"config":copy.deepcopy(self.config),
@@ -112,9 +116,9 @@ class Engine:
         if abs(end-int(time.time()*1000))>120000:raise DataError("Часы сервера и биржи расходятся")
         symbols=sorted(set(cfg["symbols"])|{"BTCUSDT"});candles={};snaps={};events={}
         metadata={};frames={}
-        for symbol in symbols:
+        def load_symbol(symbol):
             cached=self.store.candles(symbol)
-            start=end-int(cfg["scanner"]["warmup_days"])*86400000 if cached.empty else int(cached.ts.iloc[-1])+MINUTE
+            start=(end-8*60*MINUTE if getattr(self.api,"spot_reference",False) else end-int(cfg["scanner"]["warmup_days"])*86400000) if cached.empty else int(cached.ts.iloc[-1])+MINUTE
             if start<end:
                 fresh=self.api.candles(symbol,start,end-MINUTE);self.store.add_candles(symbol,fresh)
                 cached=self.store.candles(symbol)
@@ -124,7 +128,7 @@ class Engine:
             # Sliding the warmup boundary would silently change recursive EMAs.
             d=clean_candles(cached)
             if int(d.ts.iloc[-1])!=end-MINUTE:raise DataError("Не хватает свежих минутных свечей")
-            candles[symbol]=d;frames[symbol]=prepare(d)
+            candles[symbol]=d;frames[symbol]=self.api.analysis_frames(symbol,self.store,end) if hasattr(self.api,"analysis_frames") else prepare(d)
             metadata[symbol]=self.api.instrument(symbol)
             try:
                 snaps[symbol]=self.api.snapshot(symbol);self.store.snapshot(symbol,snaps[symbol])
@@ -136,6 +140,11 @@ class Engine:
                 if expected and last<expected<end and not any(e["ts"]==expected for e in events[symbol]):
                     raise DataError("Ожидаемый funding ещё не опубликован; повторим цикл")
             else:events[symbol]=[]
+        if getattr(self.api,"spot_reference",False):
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(load_symbol,symbols))
+        else:
+            for symbol in symbols:load_symbol(symbol)
         now=int(time.time()*1000)
         if now-end>cfg["scanner"]["max_data_age_seconds"]*1000:raise DataError("Загрузка заняла слишком долго; данные устарели")
         with self.lock:
@@ -149,7 +158,7 @@ class Engine:
                     bars={s:indexed[s].loc[ts].to_dict() for s in symbols}
                     funding={s:[fund_by[s][ts]] for s in symbols if ts in fund_by[s]}
                     for key,a in self.accounts.items():
-                        a.funding_quality="historical_rates_mark_1m_approximation"
+                        a.funding_quality="not_applicable_spot_reference" if getattr(self.api,"spot_reference",False) else "historical_rates_mark_1m_approximation"
                         notes=a.step(ts,bars,metadata,funding)
                         if key.endswith(":active"):
                             alerts.extend({"kind":"execution","account":key,"event":note} for note in notes)

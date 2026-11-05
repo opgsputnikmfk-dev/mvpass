@@ -39,10 +39,10 @@ def main():
         sys.argv.extend(["serve", "--host", "0.0.0.0"])
         if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
             sys.argv.append("--telegram")
-    parser=argparse.ArgumentParser(description="AI Crypto Analyst 4.0 — учебные сделки и исследование фильтров")
+    parser=argparse.ArgumentParser(description="AI Crypto Analyst 4.3 — учебные сделки и исследование фильтров")
     sub=parser.add_subparsers(dest="command",required=True)
     for name in ("serve","demo"):
-        p=sub.add_parser(name);p.add_argument("--config");p.add_argument("--host",default="127.0.0.1");p.add_argument("--port",type=int,default=int(os.getenv("PORT",8765)));p.add_argument("--data-dir",default=os.getenv("DATA_DIR",".data"));p.add_argument("--telegram",action="store_true")
+        p=sub.add_parser(name);p.add_argument("--config");p.add_argument("--host",default="127.0.0.1");p.add_argument("--port",type=int,default=int(os.getenv("PORT",8765)));p.add_argument("--data-dir",default=os.getenv("DATA_DIR",".data"));p.add_argument("--telegram",action="store_true");p.add_argument("--source",choices=["bybit","binance_spot"],default=None)
     p=sub.add_parser("download");p.add_argument("--out",required=True);p.add_argument("--start",required=True);p.add_argument("--end",required=True);p.add_argument("--symbols",default="BTCUSDT,ETHUSDT,SOLUSDT")
     p=sub.add_parser("make-demo");p.add_argument("--out",required=True);p.add_argument("--days",type=int,default=20)
     p=sub.add_parser("backtest");p.add_argument("--data",required=True);p.add_argument("--config");p.add_argument("--start",required=True);p.add_argument("--end",required=True);p.add_argument("--out",required=True);p.add_argument("--all-filters",action="store_true")
@@ -59,8 +59,8 @@ def main():
     if args.command=="make-demo":make_demo(args.out,args.days);print("Synthetic dataset created; not market history.");return
     if args.command=="doctor":
         print("Python:",sys.version.split()[0]);print("Mode: paper only")
-        try:print("Bybit server UTC:",datetime.fromtimestamp(Bybit().server_time()/1000,timezone.utc))
-        except Exception as e:print("Bybit unavailable:",str(e));return 2
+        try:print("Binance Spot server UTC:",datetime.fromtimestamp(__import__("analyst.spot",fromlist=["BinanceSpot"]).BinanceSpot().server_time()/1000,timezone.utc))
+        except Exception as e:print("Binance Spot unavailable:",str(e));return 2
         return
     if args.command=="backtest":
         cs=experiment_configs(cfg) if args.all_filters else {"active":cfg}
@@ -72,6 +72,19 @@ def main():
     from analyst.engine import Engine,variants
     from analyst.web import make_server
     demo=args.command=="demo";root=Path(args.data_dir);root.mkdir(parents=True,exist_ok=True)
+    if not demo:
+        source=args.source or ("binance_spot" if args.config is None else "binance_spot" if cfg["exchange"]=="binance" else "bybit")
+        if source=="binance_spot":
+            if args.config is None and (root/"paper.sqlite").exists():
+                # Carry over settings only; never import futures candles/trades.
+                import sqlite3
+                with sqlite3.connect("file:"+str((root/"paper.sqlite").resolve())+"?mode=ro",uri=True) as previous:
+                    row=previous.execute("SELECT value FROM kv WHERE key='config'").fetchone()
+                    if row:cfg=json.loads(row[0])
+            cfg["exchange"]="binance";cfg["market"]="spot_reference"
+            # These features do not exist for spot; explicitly observe as N/A.
+            cfg["filters"]["oi"]="observe";cfg["filters"]["funding"]="observe"
+            root=root/"binance_spot_v43";root.mkdir(parents=True,exist_ok=True)
     store=Store(root/("demo.sqlite" if demo else "paper.sqlite"))
     if demo and not store.get("engine"):
         data=root/"synthetic";manifest=make_demo(data,20)

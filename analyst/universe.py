@@ -36,6 +36,7 @@ def rank_contracts(instruments, tickers, now, warmup_days=16, count=20):
     return sorted(result.values(),key=lambda x:(-x["turnover24h"],x["symbol"]))[:count]
 
 def fetch_top20(api, warmup_days):
+    if getattr(api,"spot_reference",False):return api.top20(warmup_days)
     instruments=[];cursor=None;seen=set()
     while True:
         params={"category":"linear","status":"Trading","limit":1000}

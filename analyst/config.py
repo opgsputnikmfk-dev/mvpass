@@ -68,8 +68,8 @@ def validate(raw: dict) -> dict:
     c = copy.deepcopy(raw)
     if set(c) != set(DEFAULT):
         raise ValueError("Неполная конфигурация или неизвестные поля")
-    if c["schema"] != 1 or c["mode"] != "paper" or c["exchange"] != "bybit" or c["market"] != "linear_usdt_perpetual":
-        raise ValueError("Поддерживается только Bybit USDT perpetual / paper")
+    if c["schema"] != 1 or c["mode"] != "paper" or (c["exchange"],c["market"]) not in (("bybit","linear_usdt_perpetual"),("binance","spot_reference")):
+        raise ValueError("Поддерживаются Bybit perpetual или Binance spot_reference, только paper")
     if not isinstance(c["symbols"], list) or not 1 <= len(c["symbols"]) <= 30:
         raise ValueError("Нужно от 1 до 30 символов")
     if any(not isinstance(s, str) or not re.fullmatch(r"[A-Z0-9]{2,20}USDT", s) for s in c["symbols"]) or len(set(c["symbols"])) != len(c["symbols"]):

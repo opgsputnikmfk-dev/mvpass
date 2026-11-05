@@ -12,7 +12,7 @@ from .indicators import aggregate
 
 _lock=threading.Lock()
 
-def price_chart(candles,candidate=None,synthetic=False):
+def price_chart(candles,candidate=None,synthetic=False,source="PAPER"):
     with _lock,plt.rc_context({"font.family":"DejaVu Sans","font.size":10}):
         d=aggregate(candles,5)
         if candidate:d=d[d.close_ts<=candidate["ts"]]
@@ -38,7 +38,7 @@ def price_chart(candles,candidate=None,synthetic=False):
             title=f"{candidate['symbol']} · {'LONG' if candidate['side']==1 else 'SHORT'} · {candidate['setup']}"
             ax.legend(facecolor="#182332",labelcolor="#e4eafa",loc="upper left",fontsize=8)
         else:title="Market overview · 5m"
-        ax.set_title(title+(" · SYNTHETIC DEMO" if synthetic else " · PAPER"),color="#e4eafa",loc="left",pad=15)
+        ax.set_title(title+(" · SYNTHETIC DEMO" if synthetic else " · "+source),color="#e4eafa",loc="left",pad=15)
         ticks=np.linspace(0,len(d)-1,min(6,len(d))).astype(int)
         vol.set_xticks(ticks);vol.set_xticklabels([pd.to_datetime(d.iloc[i].ts,unit="ms",utc=True).strftime("%d %b %H:%M") for i in ticks])
         vol.set_xlabel("UTC",color="#aebbd0");ax.set_ylabel("USDT",color="#aebbd0")

@@ -50,7 +50,7 @@ class Telegram:
             d=state["dashboard"];active=state["accounts"][state["generation"]+":active"]
             enabled=sum(x=="on" for x in cfg["filters"].values())
             text=("<b>AI Crypto · Главная</b>\nУчебные сделки · реальные ордера не отправляются\n\n"
-                  +html.escape(d["status_label"])+f"\nМонет в списке: {len(cfg['symbols'])} · фильтров включено: {enabled}\n"
+                  +html.escape(state["data_source"])+"\n"+html.escape(d["status_label"])+f"\nМонет в списке: {len(cfg['symbols'])} · фильтров включено: {enabled}\n"
                   +f"Открыто сделок: {a.get('open',0)} · ожидают входа: {a.get('pending',0)}\n"
                   +f"Закрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n"
                   +f"Наибольшее снижение капитала: {a.get('max_drawdown_pct',0):.2f}%\n\n"
@@ -66,12 +66,17 @@ class Telegram:
         rows.append([{"text":"←","callback_data":f"{v}:page:{max(0,page-1)}"},{"text":f"{page+1}/5 · обновить","callback_data":f"{v}:page:{page}"},{"text":"→","callback_data":f"{v}:page:{min(4,page+1)}"}])
         rows.append([{"text":"🏠 Главная","callback_data":f"{v}:home"}])
         rows.append([{"text":"Продолжить" if cfg["paused"] else "Пауза","callback_data":f"{v}:pause"},{"text":"Статистика","callback_data":f"{v}:stats"}])
-        text=f"<b>AI Crypto · Analyst 4.1</b>\n{'ДЕМО / искусственные данные' if self.engine.demo else 'УЧЕБНЫЕ СДЕЛКИ · Bybit USDT'}\nСостояние: {html.escape(state['dashboard']['status_label'])}\nСерия: <code>{v}</code>\n\nКапитал: {a.get('equity',0):,.2f} USDT\nЗакрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n\n<b>Фильтры</b>\n🟢 включён · 🟡 наблюдение · ⚫ выключен\nНажатие меняет режим и создаёт новую серию.\n\n/chart BTCUSDT — график\n/stats — сравнение\n/setups — сценарии\n/help — команды"
+        text=f"<b>AI Crypto · Analyst 4.1</b>\n{'ДЕМО / искусственные данные' if self.engine.demo else html.escape(state['data_source'])}\nСостояние: {html.escape(state['dashboard']['status_label'])}\nСерия: <code>{v}</code>\n\nКапитал: {a.get('equity',0):,.2f} USDT\nЗакрыто: {a.get('trades',0)} · результат: {a.get('return_pct',0):+.2f}%\n\n<b>Фильтры</b>\n🟢 включён · 🟡 наблюдение · ⚫ выключен\nНажатие меняет режим и создаёт новую серию.\n\n/chart BTCUSDT — график\n/stats — сравнение\n/setups — сценарии\n/help — команды"
         payload={"chat_id":self.chat_id,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}}
         if message_id:payload["message_id"]=message_id
         return self.call("editMessageText" if message_id else "sendMessage",payload)
 
-    def send(self,text,**kwargs):return self.call("sendMessage",{"chat_id":self.chat_id,"text":text,"parse_mode":"HTML",**kwargs})
+    def source_note(self):
+        return "Цены Binance Spot · ориентиры LONG/SHORT; сверяйте уровни своего фьючерса. Funding/OI недоступны." if self.engine.config["market"]=="spot_reference" else "Bybit USDT perpetual · учебное исполнение."
+
+    def send(self,text,**kwargs):
+        text=text+"\n\n"+html.escape(self.source_note())
+        return self.call("sendMessage",{"chat_id":self.chat_id,"text":text,"parse_mode":"HTML",**kwargs})
 
     def stats(self,message_id=None):
         state=self.engine.state();lines=["<b>📊 Статистика сочетаний фильтров</b>"]
@@ -88,6 +93,7 @@ class Telegram:
         return self.info_screen("\n".join(lines),message_id)
 
     def info_screen(self,text,message_id=None):
+        text=text+"\n\n"+html.escape(self.source_note())
         v=hashlib.sha256(self.engine.generation.encode()).hexdigest()[:8]
         payload={"chat_id":self.chat_id,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":[[{"text":"🏠 Главная","callback_data":f"{v}:home"}]]}}
         if message_id:payload["message_id"]=message_id
@@ -143,7 +149,7 @@ class Telegram:
             symbol=words[1].upper() if len(words)>1 else self.engine.config["symbols"][0]
             if symbol not in self.engine.config["symbols"]:return self.send("Символ отсутствует в настройках.")
             c=next((c for c in self.engine.store.recent_candidates(200) if c["symbol"]==symbol),None)
-            image=price_chart(self.engine.store.candles(symbol),c,self.engine.demo)
+            image=price_chart(self.engine.store.candles(symbol),c,self.engine.demo,source="Binance Spot reference" if self.engine.config["exchange"]=="binance" else "Bybit perpetual")
             self.call("sendPhoto",{"chat_id":self.chat_id,"caption":symbol+" · PAPER · закрытые свечи"},photo=image)
         else:self.send("<b>Команды</b>\n/start — меню\n/filters — переключатели\n/filter ema observe — режим фильтра\n/setups — сценарии\n/setup breakout on — включить сценарий\n/pause · /resume\n/stats — статистика наборов\n/combinations — сочетания фильтров\n/coins — просматриваемые монеты\n/chart BTCUSDT — график\n\nПараметры и CSV доступны в веб-дашборде.")
 
@@ -152,7 +158,7 @@ class Telegram:
             c=alert["candidate"]
             buttons=[{"text":label,"copy_text":{"text":f"{c[key]:.10g}"}} for key,label in [("reference","Вход"),("stop","Стоп"),("target","Цель")]]
             self.send(f"<b>СЦЕНАРИЙ · PAPER</b>\n{html.escape(c['symbol'])} · {'LONG' if c['side']==1 else 'SHORT'}\n{html.escape(SETUPS[c['setup']])}\n\nПредварительный вход: <code>{c['reference']:.8g}</code>\nСтоп: <code>{c['stop']:.8g}</code>\nЦель: <code>{c['target']:.8g}</code>\n\n{html.escape(c['explanation'])}\nУчебный вход после задержки; может отмениться.\nID: <code>{c['id'][:10]}</code>",reply_markup={"inline_keyboard":[buttons]})
-            try:self.call("sendPhoto",{"chat_id":self.chat_id,"caption":"Уровни на момент анализа · PAPER"},photo=price_chart(self.engine.store.candles(c["symbol"]),c,self.engine.demo))
+            try:self.call("sendPhoto",{"chat_id":self.chat_id,"caption":"Уровни на момент анализа · "+self.source_note()},photo=price_chart(self.engine.store.candles(c["symbol"]),c,self.engine.demo,source="Binance Spot reference" if self.engine.config["exchange"]=="binance" else "Bybit perpetual"))
             except Exception:self.engine.store.log("WARNING","График Telegram не доставлен")
         else:
             e=alert["event"]
