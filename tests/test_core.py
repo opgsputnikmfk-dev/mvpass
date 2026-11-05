@@ -14,7 +14,7 @@ from analyst.data import make_demo,load_dataset,Bybit,DataError
 from analyst.storage import Store
 
 def config():
-    c=copy.deepcopy(DEFAULT);c["filters"]={k:"off" for k in FILTERS};return c
+    c=copy.deepcopy(DEFAULT);c["symbols"]=["BTCUSDT","ETHUSDT","SOLUSDT"];c["filters"]={k:"off" for k in FILTERS};return c
 
 def candidate(side=1,symbol="BTCUSDT",ts=MINUTE,cid="test",reference=100):
     return Candidate(cid,symbol,ts,"pullback",side,reference,reference-side*2,reference+side*4,2,

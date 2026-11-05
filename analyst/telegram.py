@@ -94,7 +94,7 @@ class Telegram:
         return self.call("editMessageText" if message_id else "sendMessage",payload)
 
     def coins(self,message_id=None):
-        d=self.engine.state()["dashboard"];lines=["<b>🪙 Просматриваемые монеты</b>"]
+        state=self.engine.state();d=state["dashboard"];lines=["<b>🪙 Просматриваемые монеты</b>",html.escape(state.get("universe",{}).get("label","Список выбран вручную"))]
         for c in d["coins"]:
             stamp=time.strftime("%d.%m %H:%M UTC",time.gmtime(c["last_analysis"]/1000)) if c["last_analysis"] else "ещё не проверена"
             lines.append("\n<b>"+html.escape(c["symbol"])+"</b> · "+html.escape(c["status"])+"\nПоследний анализ: "+stamp+f"\nНайдено ситуаций: {c['activity']['candidates']}")

@@ -6,6 +6,7 @@ import json
 import math
 import re
 from pathlib import Path
+from .universe import FALLBACK20
 
 FILTERS = {
     "ema": "Направление EMA 50/200 (1ч)",
@@ -39,7 +40,7 @@ SETUPS = {"pullback": "Откат по тренду", "breakout": "Пробой 
 
 DEFAULT = {
     "schema": 1, "exchange": "bybit", "market": "linear_usdt_perpetual", "mode": "paper",
-    "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+    "symbols": list(FALLBACK20),
     "setups": ["pullback", "breakout", "false_break", "range_reversal"],
     "filters": {k: ("on" if k in {"ema", "atr", "room", "spread"} else "observe") for k in FILTERS},
     "params": {"adx_min": 20.0, "rsi_long_min": 45.0, "rsi_long_max": 70.0,

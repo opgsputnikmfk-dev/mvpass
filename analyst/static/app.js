@@ -52,7 +52,8 @@ function renderReport(){
  const d=state.dashboard;if(!d)return;
  const blocked=state.status==='DATA_ERROR';
  $('#bot-health').innerHTML='<div class="panel-heading"><h2>'+esc(d.status_label)+'</h2><span class="pill">'+(state.mode==='SYNTHETIC_DEMO'?'Демонстрация':'Учебный режим')+'</span></div><p>'+(blocked?'Биржа не отдаёт данные. Новые сигналы не формируются. Нулевые результаты сейчас не означают, что фильтры плохие.':state.config.paused?'Новые входы приостановлены. Открытые учебные сделки продолжают сопровождаться.':d.fresh?'Данные обновляются. Бот ждёт подходящие условия входа.':'Свежий анализ ещё не получен. Бот подключается или готовит историю.')+'</p>'+(blocked&&d.last_error?'<p class="muted">Причина: '+esc(d.last_error.message)+'</p>':'');
- $('#coin-count').textContent=d.coins.length+' монеты';
+ $('#coin-count').textContent=d.coins.length+' монет';
+ $('#universe-note').textContent=state.universe?.label||'Список выбран вручную';
  $('#coins-table').innerHTML=table(['Монета','Состояние','Последняя проверка','Найдено ситуаций','Цена'],d.coins.map(c=>[esc(c.symbol),esc(c.status),esc(dt(c.last_analysis)),n(c.activity.candidates,0),n(c.market.price,5)]));
  const groups=[...new Set(d.comparisons.map(c=>c.group))];
  if(!groups.includes(selectedSeries))selectedSeries=state.generation;

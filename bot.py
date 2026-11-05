@@ -54,6 +54,7 @@ def main():
     from analyst.data import download_dataset,make_demo,Bybit
     from analyst.research import replay,save_report,experiment_configs,register,run_stage
     cfg=read_config(getattr(args,"config",None))
+    if args.command=="demo" and args.config is None:cfg["symbols"]=["BTCUSDT","ETHUSDT","SOLUSDT"]
     if args.command=="download":download_dataset(args.out,args.symbols.split(","),utc(args.start),utc(args.end));return
     if args.command=="make-demo":make_demo(args.out,args.days);print("Synthetic dataset created; not market history.");return
     if args.command=="doctor":
@@ -79,6 +80,7 @@ def main():
         result=replay(data,variants(cfg),manifest["start_ms"]+17*86400000,manifest["end_ms"],store=store,progress=lambda s:print(s,flush=True))
         save_report(result,root/"demo_report")
     engine=Engine(store,cfg,demo)
+    if not demo and args.config is None:engine.enable_top20()
     server=make_server(engine,args.host,args.port)
     threads=[]
     if not demo:threads.append(threading.Thread(target=engine.run,daemon=True,name="scanner"))

@@ -6,7 +6,24 @@
   "symbols": [
     "BTCUSDT",
     "ETHUSDT",
-    "SOLUSDT"
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
+    "SUIUSDT",
+    "NEARUSDT",
+    "LTCUSDT",
+    "BCHUSDT",
+    "UNIUSDT",
+    "AAVEUSDT",
+    "ATOMUSDT",
+    "FILUSDT",
+    "ARBUSDT",
+    "OPUSDT"
   ],
   "setups": [
     "pullback",

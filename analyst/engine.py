@@ -27,6 +27,41 @@ class Engine:
             self.generation=saved.get("generation",version(self.config))
             for key,s in saved.get("accounts",{}).items():self.accounts[key]=Ledger(s["config"],s["name"],s)
         self.activate()
+        self.universe=store.get("universe_selection",{"mode":"manual","verified":False})
+        self.manage_universe=False
+
+    def enable_top20(self):
+        """One-time migration of saved three-coin configs, without resetting filters."""
+        from .universe import FALLBACK20
+        self.manage_universe=True
+        if self.universe.get("mode")!="top20":
+            c=copy.deepcopy(self.config);c["symbols"]=list(FALLBACK20)
+            self.update_config(c)
+            self.universe={"mode":"top20","verified":False,"ranked_at":None,"next_attempt":0,
+                           "label":"Резервный список из 20 монет; рейтинг биржи ещё не получен"}
+            self.store.set("universe_selection",self.universe)
+
+    def refresh_top20(self):
+        from .universe import fetch_top20
+        now=int(time.time()*1000)
+        if not self.manage_universe or now<self.universe.get("next_attempt",0):return
+        try:
+            ranked,observed=fetch_top20(self.api,self.config["scanner"]["warmup_days"])
+            if len(ranked)!=20:raise DataError("Для топ-20 не хватает подходящих торгуемых контрактов")
+            if abs(observed-now)>120000:raise DataError("Биржа вернула устаревший рейтинг")
+            symbols=[r["symbol"] for r in ranked]
+            if set(symbols)!=set(self.config["symbols"]):
+                c=copy.deepcopy(self.config);c["symbols"]=symbols
+                self.update_config(c)
+            self.universe={"mode":"top20","verified":True,"ranked_at":observed,
+                           "next_attempt":now+86400000,"ranking":ranked,
+                           "label":"Топ-20 подходящих криптофьючерсов по обороту Bybit за 24 часа"}
+        except (DataError,ValueError) as e:
+            label=("Последний сохранённый список из 20 монет; актуальный рейтинг недоступен"
+                   if self.universe.get("ranked_at") else "Резервный список из 20 монет; рейтинг биржи недоступен")
+            self.universe={**self.universe,"verified":False,"label":label,"next_attempt":now+3600000,"last_error":str(e)[:200]}
+            self.store.log("WARNING",f"Рейтинг топ-20 не обновлён: {e}")
+        self.store.set("universe_selection",self.universe)
 
     def activate(self,new=False):
         if new or not self.generation:
@@ -44,7 +79,9 @@ class Engine:
         c=validate(c)
         with self.lock:
             # Keep exchange/universe stable while older accounts have exposure.
-            if c["symbols"]!=self.config["symbols"] and any(a.positions or a.pending for a in self.accounts.values()):
+            protected={p.symbol for a in self.accounts.values() for p in a.positions.values()}
+            protected.update(item["candidate"]["symbol"] for a in self.accounts.values() for item in a.pending.values())
+            if protected-set(c["symbols"]):
                 raise ValueError("Измените список монет после закрытия текущих учебных сделок")
             # Cancel unfilled signals on ANY configuration change. Open trades
             # retain their immutable entry-time exit/risk rules.
@@ -58,14 +95,16 @@ class Engine:
     def state(self):
         with self.lock:
             from .dashboard import report
-            return {"app":"AI Crypto Analyst","version":"4.1.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            return {"app":"AI Crypto Analyst","version":"4.2.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
                     "dashboard":report(self),
+                    "universe":copy.deepcopy(self.universe),
                     "status":self.status,"updated_at":self.updated_at,"generation":self.generation,"config":copy.deepcopy(self.config),
                     "market":copy.deepcopy(self.market),"accounts":{k:{"stats":a.stats(),"positions":[p.to_dict() for p in a.positions.values()],
                     "trades":a.closed[-100:],"curve":a.equity_curve[-2000:],"rejections":a.rejections[-20:]} for k,a in self.accounts.items()},
                     "candidates":self.store.recent_candidates(40),"logs":self.store.logs()}
 
     def cycle(self):
+        self.refresh_top20()
         # Network work is outside the engine lock; config captured and checked
         # before applying results, so UI requests stay responsive.
         with self.lock:cfg=copy.deepcopy(self.config);generation=self.generation;last=self.last_ts

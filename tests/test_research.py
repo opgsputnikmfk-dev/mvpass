@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 from analyst.data import make_demo,load_dataset,load_snapshots,digest
 from analyst.research import register,run_stage,experiment_configs,replay,daily_bootstrap
-from analyst.config import DEFAULT
+from analyst.config import DEFAULT as ALL_DEFAULT
+DEFAULT=copy.deepcopy(ALL_DEFAULT)
+DEFAULT["symbols"]=["BTCUSDT","ETHUSDT","SOLUSDT"]
 
 class ResearchTests(unittest.TestCase):
     @classmethod

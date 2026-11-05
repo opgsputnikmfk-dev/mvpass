@@ -179,7 +179,7 @@ python bot.py download --out datasets/bybit --start 2025-01-01 --end 2026-01-01 
 BTC дополнительно загружается для контекстного фильтра. Архивы не включены в код.
 
 ```bash
-python bot.py backtest --data datasets/bybit --config configs/default.json --start 2025-02-01 --end 2025-04-01 --out reports/manual --all-filters
+python bot.py backtest --data datasets/bybit --config configs/research3.json --start 2025-02-01 --end 2025-04-01 --out reports/manual --all-filters
 ```
 
 В начале данных нужно минимум 210 полных часовых свечей для прогрева.
@@ -220,7 +220,7 @@ python bot.py backtest --data datasets/bybit --config configs/default.json --sta
 ## Зафиксированное исследование
 
 ```bash
-python bot.py lab-init --data datasets/bybit --out reports/experiment-01
+python bot.py lab-init --data datasets/bybit --config configs/research3.json --out reports/experiment-01
 python bot.py lab-run --data datasets/bybit --out reports/experiment-01 --stage develop
 python bot.py lab-run --data datasets/bybit --out reports/experiment-01 --stage select
 python bot.py lab-run --data datasets/bybit --out reports/experiment-01 --stage holdout
@@ -331,3 +331,24 @@ python bot.py serve --host 0.0.0.0 --telegram
 Результаты отдельных фильтров — группировка базовых сделок, а статистика сочетаний —
 результаты отдельных учебных счетов. Все возможные сочетания автоматически не перебираются.
 В Telegram: /start — главная, /coins — монеты, /combinations — сочетания, /filters — режимы.
+
+
+## Список монет 4.2
+
+В рыночном `serve` без явного `--config` включён автоматический топ-20
+криптофьючерсов Bybit USDT perpetual по `turnover24h`, с обновлением раз в сутки.
+Учитываются только активные контракты с историей не короче окна прогрева.
+Исключаются стейблкоины, предварительные листинги и известные типы TradFi.
+Неизвестные типы продуктов не включаются автоматически.
+Если рейтинг недоступен, используются 20 сохранённых/резервных монет и явно
+показывается, что актуальный топ не подтверждён. Повтор рейтинга — через час.
+Изменение состава создаёт новую серию статистики; рейтинг не применяется, если
+он исключит монету с открытой позицией или ожидающим входом. Добавление монет
+допускается без принудительного закрытия старых позиций. Фильтры и риск сохраняются.
+Резерв: BTC, ETH, SOL, BNB, XRP, DOGE, ADA, AVAX, LINK, DOT, SUI, NEAR, LTC, BCH,
+UNI, AAVE, ATOM, FIL, ARB, OP. Это резерв, а не подтверждённый текущий рейтинг.
+Автовыбор используется только в реальном наблюдении, не в историческом тесте.
+Для демо и проверки на трёх монетах есть `configs/research3.json`; в демо без
+конфига используются BTC/ETH/SOL из искусственного датасета.
+Явный `serve --config ...` использует заданный список без автоматического рейтинга.
+Реальные ордера по-прежнему отсутствуют.
