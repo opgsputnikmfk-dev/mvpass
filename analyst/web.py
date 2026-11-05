@@ -34,7 +34,7 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
             self.send_response(status);self.send_header("Content-Type",ctype)
             self.send_header("Content-Length",str(len(body)));self.send_header("Cache-Control","no-store")
             self.send_header("X-Content-Type-Options","nosniff");self.send_header("Referrer-Policy","no-referrer")
-            self.send_header("Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            self.send_header("Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             if cookie:self.send_header("Set-Cookie",cookie)
             self.end_headers();self.wfile.write(body)
         def json(self,status,obj):self.respond(status,json.dumps(obj,ensure_ascii=False,allow_nan=False))
@@ -53,9 +53,9 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
             if not self.valid_host():return self.json(403,{"error":"Invalid host"})
             u=urllib.parse.urlsplit(self.path);path=u.path;q=urllib.parse.parse_qs(u.query)
             engine=admin_engine
-            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"5.0.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
-            if path in ("/style.css","/app.js"):
-                return self.respond(200,(static/path[1:]).read_bytes(),"text/css" if path.endswith("css") else "text/javascript")
+            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"5.1.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
+            if path in ("/style.css","/app.js","/logo.svg"):
+                return self.respond(200,(static/path[1:]).read_bytes(),"image/svg+xml" if path.endswith("svg") else "text/css" if path.endswith("css") else "text/javascript")
             if not self.authenticated():
                 if path=="/":return self.respond(200,(static/"login.html").read_bytes(),"text/html; charset=utf-8")
                 return self.json(401,{"error":"Войдите в дашборд"})

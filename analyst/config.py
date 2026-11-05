@@ -51,7 +51,7 @@ DEFAULT = {
                "max_funding_cost": 0.0003, "oi_change_min_pct": 0.0,
                "fib_tolerance_atr": 0.2, "room_r": 1.5},
     "risk": {"initial_equity": 10000.0, "risk_pct": 0.0025, "max_open_risk_pct": 0.0075,
-             "max_side_risk_pct": 0.005, "max_positions": 3, "max_notional_equity": 1.0,
+             "max_side_risk_pct": 0.005, "max_positions": 10, "max_notional_equity": 1.0,
              "daily_loss_pct": 0.02, "max_drawdown_pct": 0.08, "stop_atr_buffer": 0.2,
              "min_stop_pct": 0.002, "max_stop_pct": 0.05, "target_r": 2.0,
              "max_hold_minutes": 240, "entry_delay_minutes": 1,

@@ -92,6 +92,9 @@ def main():
         store.save_config(cfg)
         result=replay(data,variants(cfg),manifest["start_ms"]+17*86400000,manifest["end_ms"],store=store,progress=lambda s:print(s,flush=True))
         save_report(result,root/"demo_report")
+    profile_seeds=json.loads(os.getenv("PROFILE_CONFIGS_JSON","{}"))
+    if not isinstance(profile_seeds,dict):raise ValueError("Неверные стартовые настройки аккаунтов")
+    if args.config is None and not demo:cfg=profile_seeds.get("Admin",cfg)
     engine=Engine(store,cfg,demo)
     if not demo and args.config is None:engine.enable_top20()
     from analyst.auth import load_users
@@ -101,7 +104,8 @@ def main():
     for username in records:
         if username=="Admin":continue
         userroot=root/"users"/username.lower();userroot.mkdir(parents=True,exist_ok=True)
-        profiles[username]=Engine(Store(userroot/"paper.sqlite",market_store=store),copy.deepcopy(engine.config),demo)
+        profiles[username]=Engine(Store(userroot/"paper.sqlite",market_store=store),copy.deepcopy(profile_seeds.get(username,engine.config)),demo)
+    for profile in profiles.values():profile.upgrade_position_limit()
     runner=EngineProfiles(profiles)
     server=make_server(engine,args.host,args.port,profiles=profiles,auth_records=records)
     threads=[]

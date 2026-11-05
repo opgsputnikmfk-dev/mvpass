@@ -2,13 +2,15 @@
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const n=(x,d=2)=>x==null?'—':Number(x).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});
 const dt=x=>x?new Date(x).toLocaleString('ru-RU',{timeZone:'UTC'})+' UTC':'—';
-let state=null,draft=null,dirty=false,tab='overview';
+let state=null,draft=null,dirty=false,tab='overview',chartPeriod='all';
 async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json','X-Requested-With':'Analyst','X-Account':state?.user?.username||''}:{},body:data?JSON.stringify(data):undefined});const result=await r.json();if(!r.ok)throw new Error(result.error||'Ошибка запроса');return result;}
 function error(e){$('#error').textContent=e.message;$('#error').classList.remove('hidden');}
 const login=$('#login');
 if(login){login.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/login',{username:$('#username').value,password:$('#password').value});location.reload();}catch(e){error(e);}});}
 else{
- document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{tab=b.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==tab));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x===b));$('#page-title').textContent=b.textContent;}));
+ document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{tab=b.dataset.tab;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==tab));document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x===b));$('#page-title').textContent=tab==='overview'?'Обзор рынка':b.querySelector('span:last-child').textContent.trim();}));
+ document.querySelectorAll('[data-open-tab]').forEach(b=>b.onclick=()=>document.querySelector('[data-tab="'+b.dataset.openTab+'"]').click());
+ document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{chartPeriod=b.dataset.period;renderEquity();});
  $('#logout').onclick=async()=>{await api('/api/logout',{});location.reload();};
  $('#refresh').onclick=refresh;$('#pause').onclick=async()=>{try{await api('/api/pause',{});dirty=false;await refresh();}catch(e){error(e);}};
  $('#save-filters').onclick=()=>save(draft);$('#save-json').onclick=()=>{try{save(JSON.parse($('#config-json').value));}catch(e){error(e);}};
@@ -26,10 +28,12 @@ function render(){
  if(state.config.market==='spot_reference')$('#notice').textContent='Binance Spot · уровни для учебных LONG/SHORT. Funding и открытый интерес недоступны. Для ручной сделки сверяйте цену своего фьючерса; учебный SHORT не означает продажу спота без займа.';
  $('#source-label').textContent=state.data_source||'Демонстрация';
  $('#updated').textContent='Данные: '+dt(state.updated_at);$('#series-label').textContent=state.generation.slice(0,8);$('#export').href='/api/export?account='+encodeURIComponent(key);
- $('#metrics').innerHTML=[['Учебный капитал',n(s.equity)+' USDT','Начальный: '+n(state.config.risk.initial_equity)],['Результат',n(s.return_pct)+'%','С учётом модели расходов'],['Просадка',n(s.max_drawdown_pct)+'%','По минутной переоценке'],['Закрытые сделки',n(s.trades,0),'Прибыльных: '+n(s.win_rate,1)+'%']].map(([label,value,note])=>'<div class="metric"><label>'+esc(label)+'</label><strong>'+esc(value)+'</strong><small>'+esc(note)+'</small></div>').join('');
- const curve=a?.curve||[];if(curve.length>1){const yy=curve.map(x=>x[1]),lo=Math.min(...yy),hi=Math.max(...yy),w=700,h=180;const pts=yy.map((y,i)=>(i/(yy.length-1)*w).toFixed(1)+','+(h-12-(y-lo)/(hi-lo||1)*(h-24)).toFixed(1)).join(' ');$('#equity').innerHTML='<svg viewBox="0 0 700 190" role="img" aria-label="График учебного капитала"><polyline points="'+pts+'" fill="none" stroke="#78e5c2" stroke-width="2"/></svg>';}else $('#equity').innerHTML='<p class="empty">График появится после начала наблюдения.</p>';
+ const activePositions=Object.entries(state.accounts).filter(([k])=>k.endsWith(':active')).flatMap(([,v])=>v.positions||[]);
+ $('#metrics').innerHTML=[['Учебный капитал',n(s.equity)+' USDT','Начальный: '+n(state.config.risk.initial_equity)],['Открыто сделок',activePositions.length+' / '+state.config.risk.max_positions,'Во всех ваших сериях'],['Результат',n(s.return_pct)+'%','Текущая серия · после расходов'],['Монеты',String(state.config.symbols.length),'Мониторинг выбранных монет']].map(([label,value,note],i)=>'<div class="metric"><label>'+esc(label)+'</label><strong class="'+(i===2?(s.return_pct>=0?'positive':'negative'):'')+'">'+esc(value)+'</strong><small>'+esc(note)+'</small></div>').join('');
+ renderEquity();renderOverview(activePositions);
+ $('#equity-note').textContent=state.config.market==='spot_reference'?'Учебный капитал после расходов. Для спотовых ориентиров funding не начисляется.':'Учебный капитал после расчётных комиссий, funding и переоценки позиций.';
  $('#market').innerHTML=Object.entries(state.market).map(([sym,m])=>'<div class="market-row"><div><b>'+esc(sym)+'</b><small>'+esc(m.detail||m.status)+'</small></div><div>'+n(m.price,4)+'<small>'+(m.direction===1?'Восходящее':m.direction===-1?'Нисходящее':'Неопределённое')+'</small></div></div>').join('')||'<p class="empty">Ожидание биржевых данных…</p>';
- $('#positions').innerHTML=positionsTable(a?.positions||[]);
+ $('#positions').innerHTML=positionsTable(activePositions);
  $('#trades').innerHTML=table(['Монета','Выход UTC','Итог USDT','Результат R','Причина'],(a?.trades||[]).slice(-10).reverse().map(t=>[esc(t.symbol),esc(dt(t.exit_ts)),'<span class="'+(t.net_pnl>=0?'positive':'negative')+'">'+n(t.net_pnl)+'</span>',n(t.net_r),esc(t.reason)]));
  renderReport();
  renderFilters();
@@ -49,7 +53,7 @@ function renderFilters(){
  document.querySelectorAll('[data-setup]').forEach(b=>b.onchange=()=>{draft.setups=Array.from(document.querySelectorAll('[data-setup]:checked')).map(x=>x.dataset.setup);dirty=true;});
  $('#dirty').textContent=dirty?'Есть несохранённые изменения.':'Сохранение создаёт новую серию. Открытые сделки сохраняют прежние правила.';
 }
-function details(id){const c=state.candidates.find(x=>x.id===id);if(!c)return;$('#detail-body').innerHTML='<h2>'+esc(c.symbol)+' · '+(c.side===1?'LONG':'SHORT')+'</h2><p>'+esc(c.explanation)+'</p><p>Предварительный вход '+n(c.reference,6)+' · Стоп '+n(c.stop,6)+' · Цель '+n(c.target,6)+'</p><img src="/api/chart?candidate='+encodeURIComponent(c.id)+'" alt="График цены с уровнями и Фибоначчи"><div class="scroll">'+table(['Проверка','Результат','Объяснение'],Object.entries(c.checks).map(([k,ch])=>[esc(state.filter_names[k]),ch.passed==null?'Нет данных':ch.passed?'<span class="positive">Пройдена</span>':'<span class="negative">Не пройдена</span>',esc(ch.detail)]))+'</div>';$('#detail').showModal();}
+function details(id){const c=state.candidates.find(x=>x.id===id);if(!c)return;$('#detail-body').innerHTML='<h2>'+esc(c.symbol)+' · '+(c.side===1?'LONG':'SHORT')+'</h2><p>'+esc(c.explanation)+'</p><div class="signal-levels"><div><small>Вход · ТВХ</small><strong>'+n(c.reference,6)+'</strong></div><div class="target"><small>TP · Цель</small><strong>'+n(c.target,6)+'</strong></div><div><small>SL · Стоп</small><strong>'+n(c.stop,6)+'</strong></div></div><p class="muted">Предварительные уровни сценария; исполнение подтверждается в разделе «Мои сделки».</p><img src="/api/chart?candidate='+encodeURIComponent(c.id)+'" alt="График цены с уровнями и Фибоначчи"><div class="scroll">'+table(['Проверка','Результат','Объяснение'],Object.entries(c.checks).map(([k,ch])=>[esc(state.filter_names[k]),ch.passed==null?'Нет данных':ch.passed?'<span class="positive">Пройдена</span>':'<span class="negative">Не пройдена</span>',esc(ch.detail)]))+'</div>';$('#detail').showModal();}
 
 let selectedSeries=null,selectedAccount=null;
 function renderReport(){
@@ -76,9 +80,35 @@ function renderReport(){
 
 function positionsTable(positions){
  const money=x=>x==null?'—':(x>0?'+':'')+n(x);
- return table(['Монета','Сторона','Вход','Цена сейчас','PnL USDT ≈','PnL % ≈','Стоп','Цель','Время цены'],positions.map(p=>[
+ return table(['Монета','Сторона','Вход · ТВХ','Цена сейчас','PnL USDT ≈','PnL % ≈','SL · Стоп','TP · Цель','Время цены'],positions.map(p=>[
   esc(p.symbol),p.side===1?'На рост · LONG':'На падение · SHORT',n(p.entry,6),n(p.current_price,6),
   '<span class="'+(p.estimated_pnl==null?'muted':p.estimated_pnl>=0?'positive':'negative')+'">'+money(p.estimated_pnl)+'</span>',money(p.estimated_pnl_pct)+'%',
   n(p.stop,6),n(p.target,6),'<span class="'+(p.price_stale?'negative':'muted')+'">'+esc(dt(p.price_ts))+(p.price_kind==='minute_close'?' · свеча':'')+(p.price_stale?' · устарела':'')+'</span>'
  ]));
+}
+
+function renderEquity(){
+ const a=state.accounts[state.generation+':active'];let curve=a?.curve||[];
+ if(chartPeriod!=='all'){const cutoff=Date.now()-Number(chartPeriod)*86400000;curve=curve.filter(p=>p[0]>=cutoff);}
+ document.querySelectorAll('[data-period]').forEach(b=>b.classList.toggle('active',b.dataset.period===chartPeriod));
+ if(curve.length<2){$('#equity').innerHTML='<div class="empty"><span class="empty-icon">⌁</span><b>Начинаем наблюдение</b><small>График появится после записи первых точек капитала.</small></div>';return;}
+ const values=curve.map(p=>p[1]),min=Math.min(...values),max=Math.max(...values),pad=Math.max((max-min)*.15,Math.abs(max)*.0005,1),lo=min-pad,hi=max+pad;
+ const w=700,h=210,left=70,right=16,top=12,bottom=32,pw=w-left-right,ph=h-top-bottom;
+ const points=curve.map((p,i)=>[(left+i/(curve.length-1)*pw).toFixed(2),(top+(hi-p[1])/(hi-lo)*ph).toFixed(2)]);
+ const line=points.map(p=>p.join(',')).join(' '),last=points[points.length-1];
+ const grid=[0,.25,.5,.75,1].map(f=>{const y=top+f*ph;return '<line x1="'+left+'" y1="'+y+'" x2="'+(w-right)+'" y2="'+y+'" stroke="#2a2d2f"/><text x="'+(left-10)+'" y="'+(y+4)+'" text-anchor="end">'+esc(n(hi-f*(hi-lo),0))+'</text>';}).join('');
+ const date=t=>new Date(t).toLocaleDateString('ru-RU',{day:'numeric',month:'short',timeZone:'UTC'});
+ $('#equity').innerHTML='<svg viewBox="0 0 700 210" role="img" aria-label="Изменение учебного капитала"><defs><linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8aefbb" stop-opacity=".2"/><stop offset="100%" stop-color="#8aefbb" stop-opacity="0"/></linearGradient></defs>'+grid+'<polygon points="'+left+','+(top+ph)+' '+line+' '+(w-right)+','+(top+ph)+'" fill="url(#equity-fill)"/><polyline points="'+line+'" fill="none" stroke="#8aefbb" stroke-width="2.5"/><circle cx="'+last[0]+'" cy="'+last[1]+'" r="4" fill="#a1f4c6"/><text x="'+left+'" y="204">'+esc(date(curve[0][0]))+'</text><text x="'+(w-right)+'" y="204" text-anchor="end">'+esc(date(curve[curve.length-1][0]))+'</text></svg>';
+}
+function renderOverview(positions){
+ const current=state.generation+':active';
+ const candidate=state.candidates.find(c=>c.decisions.some(d=>d.account===current&&d.accepted));
+ if(candidate){$('#latest-signal').innerHTML='<div class="signal-symbol"><b>'+esc(candidate.symbol)+'</b><span class="side '+(candidate.side===1?'positive':'negative')+'">'+(candidate.side===1?'LONG':'SHORT')+'</span></div><p class="muted">'+esc(dt(candidate.ts))+'</p><div class="signal-levels"><div><small>Вход · ТВХ</small><strong>'+n(candidate.reference,6)+'</strong></div><div class="target"><small>TP · Цель</small><strong>'+n(candidate.target,6)+'</strong></div><div><small>SL · Стоп</small><strong>'+n(candidate.stop,6)+'</strong></div></div><p class="small muted">Последний допущенный сценарий. Его вход мог быть отменён или сделка уже закрыта.</p><button class="text-button" id="spotlight-detail">Разобрать сценарий ↗</button>';$('#spotlight-detail').onclick=()=>{document.querySelector('[data-tab="signals"]').click();details(candidate.id);};}
+ else $('#latest-signal').innerHTML='<div class="empty"><span class="empty-icon">◎</span><b>Ищем точку входа</b><small>Здесь появятся ТВХ, TP и SL, когда сценарий пройдёт ваши фильтры.</small></div>';
+ $('#overview-positions').innerHTML=table(['Монета','Вход','TP','SL','PnL ≈'],positions.map(p=>[esc(p.symbol)+' <small class="'+(p.side===1?'positive':'negative')+'">'+(p.side===1?'LONG':'SHORT')+'</small>',n(p.entry,4),n(p.target,4),n(p.stop,4),'<span class="'+(p.price_stale?'muted':p.estimated_pnl>=0?'positive':'negative')+'">'+(p.estimated_pnl>0?'+':'')+n(p.estimated_pnl)+(p.price_stale?' · устар.':'')+'</span>']));
+ const comparisons=(state.dashboard?.comparisons||[]).filter(c=>c.current);
+ $('#overview-combinations').innerHTML=table(['Набор','Сделок','Удачных','Итог USDT'],comparisons.map(c=>[esc(c.name),n(c.stats.trades,0),n(c.stats.win_rate,0)+'%','<span class="'+(c.realized_pnl>=0?'positive':'negative')+'">'+n(c.realized_pnl)+'</span>']));
+ const labels={on:'Включён',observe:'Наблюдение',off:'Выключен'};
+ const chosen=Object.entries(state.config.filters).filter(([,v])=>v==='on');
+ $('#filter-summary').innerHTML=(chosen.length?chosen.slice(0,5):Object.entries(state.config.filters).slice(0,5)).map(([k,v])=>'<div class="filter-summary-row"><span>'+esc(state.filter_names[k])+'</span><span class="mini-mode '+v+'" aria-label="'+labels[v]+'">'+(v==='on'?'●':v==='observe'?'◐':'○')+'</span></div>').join('')+'<p class="small muted">Включено '+chosen.length+' из '+Object.keys(state.config.filters).length+'. Изменить режимы можно в разделе «Фильтры».</p>';
 }

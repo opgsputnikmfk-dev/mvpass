@@ -41,7 +41,7 @@ def report(engine):
     for s in engine.config["symbols"]:
         m=engine.market.get(s,{})
         checked=engine.last_analysis.get(s)
-        coins.append({"symbol":s,"selected":True,"last_analysis":checked,"status":("Нет свежих данных" if engine.status=="DATA_ERROR" else "Ещё не проверена" if not checked else "Найдена ситуация" if m.get("status")=="CANDIDATES" else "Ожидает условий входа"),
+        coins.append({"symbol":s,"selected":True,"last_analysis":checked,"status":("Нет свежих данных" if engine.status=="DATA_ERROR" else "Ещё не проверена" if not checked else "Сделка открыта — поиск на паузе" if m.get("status")=="POSITION_OPEN" else "Найдена ситуация" if m.get("status")=="CANDIDATES" else "Ожидает условий входа"),
                       "market":m,"history":cache.get(s,{"candles":0,"last_candle":None}),"activity":totals.get(s,{"candidates":0,"last_candidate":None})})
     logs=store.logs();last_error=next((x for x in logs if x["level"]=="ERROR"),None)
     return {"status_label":STATUS.get(engine.status,engine.status),"last_error":last_error,"coins":coins,"comparisons":comparisons,"filter_attribution":attribution,

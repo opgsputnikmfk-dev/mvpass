@@ -38,6 +38,10 @@ class Ledger:
         self.rejections=self.rejections[-1000:]
 
     def propose(self,candidate):
+        if any(p.symbol==candidate.symbol for p in self.positions.values()):
+            return False,["По монете уже открыта сделка"]
+        if any(item["candidate"]["symbol"]==candidate.symbol for item in self.pending.values()):
+            return False,["По монете уже ожидается вход"]
         ok,reasons=allowed(candidate,self.config)
         if not ok: return False,reasons
         if candidate.id in self.pending or any(p.candidate_id==candidate.id for p in self.positions.values()):

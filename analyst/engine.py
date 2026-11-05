@@ -32,6 +32,19 @@ class Engine:
         self.manage_universe=False
         self.live_prices={};self.quote_error=None;self.notifications_enabled=True
 
+    def upgrade_position_limit(self):
+        """One-time rollout for saved profiles; later personal choices survive."""
+        marker="position_limit_10_v1"
+        if self.store.get(marker):return
+        if self.config["risk"]["max_positions"]==3:
+            c=copy.deepcopy(self.config);c["risk"]["max_positions"]=10
+            self.update_config(c)
+        self.store.set(marker,True)
+
+    def occupied_symbols(self):
+        # Old settings may still have open positions after a filter change.
+        return {p.symbol for key,a in self.accounts.items() if key.endswith(":active") for p in a.positions.values()}
+
     def refresh_quotes(self):
         with self.lock:symbols={p.symbol for a in self.accounts.values() for p in a.positions.values()}
         if not symbols:return
@@ -115,7 +128,7 @@ class Engine:
             from .dashboard import report
             from .valuation import position_view
             now=int(time.time()*1000)
-            return {"app":"AI Crypto Analyst","version":"5.0.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            return {"app":"AI Crypto Analyst","version":"5.1.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
                     "quote_error":self.quote_error,
                     "data_source":("Binance Spot · ориентиры LONG/SHORT" if self.config["exchange"]=="binance" else "Bybit USDT perpetual"),
                     "dashboard":report(self),
@@ -194,8 +207,15 @@ class Engine:
                         if self.notifications_enabled and key.endswith(":active"):
                             alerts.extend({"kind":"execution","account":key,"event":note} for note in notes)
                     self.last_ts=ts
+                occupied=self.occupied_symbols()
                 for symbol in cfg["symbols"]:
                     bar_end=int(frames[symbol][5].close_ts.iloc[-1])
+                    if symbol in occupied:
+                        self.market[symbol]={**self.market.get(symbol,{}),"status":"POSITION_OPEN",
+                            "price":float(frames[symbol][5].close.iloc[-1]),"closed_at":bar_end,
+                            "detail":"Сделка открыта — поиск новых входов по монете приостановлен до её закрытия"}
+                        self.last_analysis[symbol]=bar_end
+                        continue
                     if self.last_analysis.get(symbol)==bar_end:continue
                     found,status=analyze(symbol,frames[symbol],now,cfg,snaps.get(symbol),frames["BTCUSDT"])
                     self.market[symbol]=status;self.last_analysis[symbol]=bar_end

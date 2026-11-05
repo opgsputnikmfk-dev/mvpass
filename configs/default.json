@@ -79,7 +79,7 @@
     "risk_pct": 0.0025,
     "max_open_risk_pct": 0.0075,
     "max_side_risk_pct": 0.005,
-    "max_positions": 3,
+    "max_positions": 10,
     "max_notional_equity": 1.0,
     "daily_loss_pct": 0.02,
     "max_drawdown_pct": 0.08,
