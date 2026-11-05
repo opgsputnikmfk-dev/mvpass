@@ -53,7 +53,7 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
             if not self.valid_host():return self.json(403,{"error":"Invalid host"})
             u=urllib.parse.urlsplit(self.path);path=u.path;q=urllib.parse.parse_qs(u.query)
             engine=admin_engine
-            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"5.1.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
+            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"5.2.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
             if path in ("/style.css","/app.js","/logo.svg"):
                 return self.respond(200,(static/path[1:]).read_bytes(),"image/svg+xml" if path.endswith("svg") else "text/css" if path.endswith("css") else "text/javascript")
             if not self.authenticated():

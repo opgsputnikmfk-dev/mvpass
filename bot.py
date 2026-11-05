@@ -105,7 +105,8 @@ def main():
         if username=="Admin":continue
         userroot=root/"users"/username.lower();userroot.mkdir(parents=True,exist_ok=True)
         profiles[username]=Engine(Store(userroot/"paper.sqlite",market_store=store),copy.deepcopy(profile_seeds.get(username,engine.config)),demo)
-    for profile in profiles.values():profile.upgrade_position_limit()
+    for profile in profiles.values():
+        profile.upgrade_position_limit();profile.upgrade_risk_allocation()
     runner=EngineProfiles(profiles)
     server=make_server(engine,args.host,args.port,profiles=profiles,auth_records=records)
     threads=[]

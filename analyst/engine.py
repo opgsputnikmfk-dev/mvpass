@@ -41,6 +41,17 @@ class Engine:
             self.update_config(c)
         self.store.set(marker,True)
 
+    def upgrade_risk_allocation(self):
+        marker="risk_slots_v1"
+        if self.store.get(marker):return
+        c=copy.deepcopy(self.config)
+        r=c["risk"]
+        r.update(risk_pct=min(r["risk_pct"],.0005),max_positions=10,
+                 max_open_risk_pct=min(r["max_open_risk_pct"],.0075),
+                 max_side_risk_pct=min(r["max_side_risk_pct"],.005),max_notional_equity=min(r["max_notional_equity"],1.0))
+        if c!=self.config:self.update_config(c)
+        self.store.set(marker,True)
+
     def occupied_symbols(self):
         # Old settings may still have open positions after a filter change.
         return {p.symbol for key,a in self.accounts.items() if key.endswith(":active") for p in a.positions.values()}
@@ -128,7 +139,7 @@ class Engine:
             from .dashboard import report
             from .valuation import position_view
             now=int(time.time()*1000)
-            return {"app":"AI Crypto Analyst","version":"5.1.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            return {"app":"AI Crypto Analyst","version":"5.2.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
                     "quote_error":self.quote_error,
                     "data_source":("Binance Spot · ориентиры LONG/SHORT" if self.config["exchange"]=="binance" else "Bybit USDT perpetual"),
                     "dashboard":report(self),
@@ -203,7 +214,9 @@ class Engine:
                     funding={s:[fund_by[s][ts]] for s in symbols if ts in fund_by[s]}
                     for key,a in self.accounts.items():
                         a.funding_quality="not_applicable_spot_reference" if getattr(self.api,"spot_reference",False) else "historical_rates_mark_1m_approximation"
-                        notes=a.step(ts,bars,metadata,funding)
+                        variant=key.rsplit(":",1)[-1]
+                        external=[p for other_key,other in self.accounts.items() if other_key!=key and other_key.rsplit(":",1)[-1]==variant for p in other.positions.values()]
+                        notes=a.step(ts,bars,metadata,funding,external_positions=external)
                         if self.notifications_enabled and key.endswith(":active"):
                             alerts.extend({"kind":"execution","account":key,"event":note} for note in notes)
                     self.last_ts=ts

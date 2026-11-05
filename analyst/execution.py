@@ -51,12 +51,13 @@ class Ledger:
         self.pending[candidate.id]={"candidate":candidate.to_dict(),"due":due}
         return True,[]
 
-    def _open(self,c,b,meta,ts):
+    def _open(self,c,b,meta,ts,external_positions=None):
+        exposure=list(self.positions.values())+list(external_positions or [])
         r=self.config["risk"];eq=self.equity()
         if eq<=self.peak*(1-r["max_drawdown_pct"]):self.halted=True
         if self.config["paused"] or self.halted: return "Пауза / лимит просадки"
         if eq<=self.day_start*(1-r["daily_loss_pct"]): return "Лимит дневного убытка"
-        if len(self.positions)>=r["max_positions"] or any(p.symbol==c.symbol for p in self.positions.values()): return "Лимит позиций / символ занят"
+        if len(exposure)>=r["max_positions"] or any(p.symbol==c.symbol for p in exposure): return "Лимит позиций / символ занят"
         if ts-self.last_entry.get(c.symbol,-10**18)<r["cooldown_minutes"]*MINUTE: return "Повторный вход в период ожидания"
         slip=r["slippage_bps"]/10000
         entry=float(b["open"])*(1+c.side*slip)
@@ -73,14 +74,27 @@ class Ledger:
         if self.config["filters"]["room"]=="on" and obstacle is not None and c.side*(target-obstacle)>0: return "После смещения входа цель за встречным уровнем"
         stopfill=stop*(1-c.side*slip)
         unit_loss=c.side*(entry-stopfill)+r["fee_rate"]*(entry+stopfill)
-        budget=eq*r["risk_pct"]
-        total_risk=sum(p.planned_risk for p in self.positions.values())
-        same_risk=sum(p.planned_risk for p in self.positions.values() if p.side==c.side)
+        # Split both risk and unlevered capital across the intended slots.
+        # A narrow stop must not consume the capital of several future trades.
+        slots=r["max_positions"]
+        budget=eq*min(r["risk_pct"],r["max_open_risk_pct"]/slots,r["max_side_risk_pct"]/slots)
+        total_risk=sum(p.planned_risk for p in exposure)
+        same_risk=sum(p.planned_risk for p in exposure if p.side==c.side)
         available=min(budget,eq*r["max_open_risk_pct"]-total_risk,eq*r["max_side_risk_pct"]-same_risk)
-        used=sum(p.qty*self.last_prices.get(p.symbol,p.entry) for p in self.positions.values())
-        notional_cap=max(0,eq*r["max_notional_equity"]-used)
-        qty=floor_step(min(max(0,available)/unit_loss,notional_cap/entry,meta.get("max_qty",1e20)),step)
-        if qty<meta.get("min_qty",step) or qty*entry<meta.get("min_notional",5) or qty<=0: return "Недостаточно свободного риска / минимальный объём"
+        used=sum(p.qty*max(p.entry,self.last_prices.get(p.symbol,p.entry)) for p in exposure)
+        notional_cap=min(eq*r["max_notional_equity"]/slots,max(0,eq*r["max_notional_equity"]-used))
+        # Fees and the adverse entry fill reduce equity immediately. Reserve
+        # these costs BEFORE checking post-entry cash and risk caps.
+        entry_cost=entry*r["fee_rate"]+max(0,c.side*(entry-float(b["open"])))
+        slot_rate=budget/eq
+        risk_qty=min(budget/(unit_loss+entry_cost*slot_rate),
+                     max(0,eq*r["max_open_risk_pct"]-total_risk)/(unit_loss+entry_cost*r["max_open_risk_pct"]),
+                     max(0,eq*r["max_side_risk_pct"]-same_risk)/(unit_loss+entry_cost*r["max_side_risk_pct"]))
+        qty=floor_step(min(risk_qty,notional_cap/(entry+entry_cost*r["max_notional_equity"]),meta.get("max_qty",1e20)),step)
+        if available<=0:return "Исчерпан общий риск или риск одного направления"
+        if notional_cap<=0:return "Исчерпан лимит занятого капитала"
+        if qty<meta.get("min_qty",step) or qty*entry<meta.get("min_notional",5) or qty<=0:
+            return "Безопасный размер позиции меньше минимального объёма биржи"
         fee=qty*entry*r["fee_rate"];self.cash-=fee
         p=Position(c.id,c.id,c.symbol,c.side,int(ts),entry,stop,stop,target,qty,qty*unit_loss,fee,self.version,copy.deepcopy(r),last_bar=ts-MINUTE,setup=c.setup)
         self.positions[p.id]=p;self.last_entry[c.symbol]=int(ts)
@@ -96,7 +110,7 @@ class Ledger:
         self.closed.append(record);del self.positions[p.id]
         return record
 
-    def step(self,ts,bars,metadata,funding=None):
+    def step(self,ts,bars,metadata,funding=None,external_positions=None):
         """One chronological minute for ALL symbols, not one symbol's full history.
 
         Funding events apply to positions held BEFORE that minute's open. Stop
@@ -140,7 +154,7 @@ class Ledger:
             if c.symbol not in bars: continue
             del self.pending[cid]
             if ts!=item["due"]: self.reject(cid,"Пропущено время входа",ts);continue
-            reason=self._open(c,bars[c.symbol],metadata.get(c.symbol,{}),ts)
+            reason=self._open(c,bars[c.symbol],metadata.get(c.symbol,{}),ts,external_positions)
             if reason:self.reject(cid,reason,ts)
             else:
                 self.positions[cid].rules["entry_atr"]=c.atr
