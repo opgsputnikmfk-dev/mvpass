@@ -22,7 +22,7 @@ class BinanceSpot:
         self._info=None;self._info_ts=0;self._lock=threading.Lock()
 
     def get(self,path,params=None):
-        if path not in {"/api/v3/time","/api/v3/exchangeInfo","/api/v3/klines","/api/v3/depth","/api/v3/ticker/24hr"}:
+        if path not in {"/api/v3/time","/api/v3/exchangeInfo","/api/v3/klines","/api/v3/depth","/api/v3/ticker/24hr","/api/v3/ticker/bookTicker"}:
             raise DataError("Только публичные данные Binance Spot")
         url=self.BASE+path+("?"+urllib.parse.urlencode(params) if params else "")
         for attempt in range(3):
@@ -92,6 +92,18 @@ class BinanceSpot:
                 "mark_price":None,"funding_rate":None,"next_funding_ts":None,"oi_change_pct":None,"open_interest":None}
 
     def funding(self,*_):return []  # not applicable; never fabricated
+
+    def live_quotes(self,symbols):
+        if not symbols:return {}
+        rows=self.get("/api/v3/ticker/bookTicker",{"symbols":json.dumps(sorted(set(symbols)),separators=(",",":"))})
+        if isinstance(rows,dict):rows=[rows]
+        now=int(time.time()*1000);out={}
+        for r in rows:
+            if r.get("symbol") not in symbols:continue
+            bid=float(r["bidPrice"]);ask=float(r["askPrice"])
+            if not all(math.isfinite(v) and v>0 for v in (bid,ask)) or ask<bid:continue
+            out[r["symbol"]]={"bid":bid,"ask":ask,"ts":now}
+        return out
 
     def analysis_frames(self,symbol,store,end):
         """Closed exchange candles, persistent EMA seeds, bounded cold start.

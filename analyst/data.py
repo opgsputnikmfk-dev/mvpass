@@ -38,6 +38,17 @@ class Bybit:
     def server_time(self):
         d=self.get("/v5/market/time");return int(d["time"])
 
+    def live_quotes(self,symbols):
+        if not symbols:return {}
+        rows=self.get("/v5/market/tickers",{"category":"linear"})["result"]["list"]
+        now=int(time.time()*1000);out={}
+        for r in rows:
+            if r.get("symbol") not in symbols:continue
+            try:bid=float(r["bid1Price"]);ask=float(r["ask1Price"])
+            except (KeyError,ValueError,TypeError):continue
+            if np.isfinite([bid,ask]).all() and 0<bid<=ask:out[r["symbol"]]={"bid":bid,"ask":ask,"ts":now}
+        return out
+
     def instrument(self,symbol):
         r=self.get("/v5/market/instruments-info",{"category":"linear","symbol":symbol})["result"]["list"]
         if len(r)!=1:raise DataError(f"Контракт {symbol} не найден")

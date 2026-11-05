@@ -30,6 +30,21 @@ class Engine:
         self.activate()
         self.universe=store.get("universe_selection",{"mode":"manual","verified":False})
         self.manage_universe=False
+        self.live_prices={};self.quote_error=None
+
+    def refresh_quotes(self):
+        with self.lock:symbols={p.symbol for a in self.accounts.values() for p in a.positions.values()}
+        if not symbols:return
+        quotes=self.api.live_quotes(symbols)
+        with self.lock:
+            self.live_prices=quotes;self.quote_error=None
+
+    def quote_loop(self):
+        while not self.stop.is_set():
+            try:self.refresh_quotes()
+            except Exception:
+                with self.lock:self.quote_error="Свежие котировки временно недоступны; проверьте время цены"
+            self.stop.wait(10)
 
     def enable_top20(self):
         """One-time migration of saved three-coin configs, without resetting filters."""
@@ -98,12 +113,15 @@ class Engine:
     def state(self):
         with self.lock:
             from .dashboard import report
-            return {"app":"AI Crypto Analyst","version":"4.3.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+            from .valuation import position_view
+            now=int(time.time()*1000)
+            return {"app":"AI Crypto Analyst","version":"4.4.0","mode":"SYNTHETIC_DEMO" if self.demo else "PAPER",
+                    "quote_error":self.quote_error,
                     "data_source":("Binance Spot · ориентиры LONG/SHORT" if self.config["exchange"]=="binance" else "Bybit USDT perpetual"),
                     "dashboard":report(self),
                     "universe":copy.deepcopy(self.universe),
                     "status":self.status,"updated_at":self.updated_at,"generation":self.generation,"config":copy.deepcopy(self.config),
-                    "market":copy.deepcopy(self.market),"accounts":{k:{"stats":a.stats(),"positions":[p.to_dict() for p in a.positions.values()],
+                    "market":copy.deepcopy(self.market),"accounts":{k:{"stats":a.stats(),"positions":[position_view(p,a,self.live_prices,now) for p in a.positions.values()],
                     "trades":a.closed[-100:],"curve":a.equity_curve[-2000:],"rejections":a.rejections[-20:]} for k,a in self.accounts.items()},
                     "candidates":self.store.recent_candidates(40),"logs":self.store.logs()}
 

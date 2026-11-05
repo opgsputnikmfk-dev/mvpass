@@ -27,7 +27,7 @@ function render(){
  $('#metrics').innerHTML=[['Учебный капитал',n(s.equity)+' USDT','Начальный: '+n(state.config.risk.initial_equity)],['Результат',n(s.return_pct)+'%','С учётом модели расходов'],['Просадка',n(s.max_drawdown_pct)+'%','По минутной переоценке'],['Закрытые сделки',n(s.trades,0),'Прибыльных: '+n(s.win_rate,1)+'%']].map(([label,value,note])=>'<div class="metric"><label>'+esc(label)+'</label><strong>'+esc(value)+'</strong><small>'+esc(note)+'</small></div>').join('');
  const curve=a?.curve||[];if(curve.length>1){const yy=curve.map(x=>x[1]),lo=Math.min(...yy),hi=Math.max(...yy),w=700,h=180;const pts=yy.map((y,i)=>(i/(yy.length-1)*w).toFixed(1)+','+(h-12-(y-lo)/(hi-lo||1)*(h-24)).toFixed(1)).join(' ');$('#equity').innerHTML='<svg viewBox="0 0 700 190" role="img" aria-label="График учебного капитала"><polyline points="'+pts+'" fill="none" stroke="#78e5c2" stroke-width="2"/></svg>';}else $('#equity').innerHTML='<p class="empty">График появится после начала наблюдения.</p>';
  $('#market').innerHTML=Object.entries(state.market).map(([sym,m])=>'<div class="market-row"><div><b>'+esc(sym)+'</b><small>'+esc(m.detail||m.status)+'</small></div><div>'+n(m.price,4)+'<small>'+(m.direction===1?'Восходящее':m.direction===-1?'Нисходящее':'Неопределённое')+'</small></div></div>').join('')||'<p class="empty">Ожидание биржевых данных…</p>';
- $('#positions').innerHTML=table(['Монета','Сторона','Вход','Стоп','Цель','Риск USDT'],(a?.positions||[]).map(p=>[esc(p.symbol),p.side===1?'LONG':'SHORT',n(p.entry,6),n(p.stop,6),n(p.target,6),n(p.planned_risk)]));
+ $('#positions').innerHTML=positionsTable(a?.positions||[]);
  $('#trades').innerHTML=table(['Монета','Выход UTC','Итог USDT','Результат R','Причина'],(a?.trades||[]).slice(-10).reverse().map(t=>[esc(t.symbol),esc(dt(t.exit_ts)),'<span class="'+(t.net_pnl>=0?'positive':'negative')+'">'+n(t.net_pnl)+'</span>',n(t.net_r),esc(t.reason)]));
  renderReport();
  renderFilters();
@@ -69,4 +69,14 @@ function renderReport(){
  const c=rows.find(c=>c.key===selectedAccount);if(!c)return;
  const breakdown=obj=>table(['Название','Сделки','Итог USDT','Удачных'],Object.entries(obj).map(([k,v])=>[esc(k),n(v.trades,0),n(v.net_pnl),n(v.trades?100*v.wins/v.trades:null,1)+'%']));
  $('#account-detail').innerHTML='<p><b>Состав:</b> '+esc(c.filters.join(' + ')||'Без дополнительных фильтров')+'</p><p><b>Наблюдение без влияния на вход:</b> '+esc(c.observed.join(', ')||'нет')+'</p><p><b>Сценарии:</b> '+esc(c.setups.join(', ')||'выключены')+'</p><p class="muted">Наблюдение за ситуациями: '+esc(dt(c.activity.start))+' — '+esc(dt(c.activity.end))+'</p><p>'+esc(c.sample_note)+'</p><p>Закрытые сделки: '+n(c.stats.trades,0)+' · результат '+n(c.stats.return_pct)+'% · средняя сделка '+n(c.stats.mean_r,3)+' R</p><a class="button secondary" href="/api/export?account='+encodeURIComponent(c.key)+'" download="combination.csv">Скачать сделки этого набора</a><h3>По монетам</h3><div class="scroll">'+breakdown(c.by_symbol)+'</div><h3>По сценариям входа</h3><div class="scroll">'+breakdown(c.by_setup)+'</div>';
+ $('#account-detail').innerHTML+='<h3>Открытые сделки этого набора</h3><div class="scroll">'+positionsTable(state.accounts[c.key]?.positions||[])+'</div><p class="muted">PnL — оценка при закрытии сейчас, после расчётных комиссий и проскальзывания. Процент от суммы входа, без плеча.</p>';
+}
+
+function positionsTable(positions){
+ const money=x=>x==null?'—':(x>0?'+':'')+n(x);
+ return table(['Монета','Сторона','Вход','Цена сейчас','PnL USDT ≈','PnL % ≈','Стоп','Цель','Время цены'],positions.map(p=>[
+  esc(p.symbol),p.side===1?'На рост · LONG':'На падение · SHORT',n(p.entry,6),n(p.current_price,6),
+  '<span class="'+(p.estimated_pnl==null?'muted':p.estimated_pnl>=0?'positive':'negative')+'">'+money(p.estimated_pnl)+'</span>',money(p.estimated_pnl_pct)+'%',
+  n(p.stop,6),n(p.target,6),'<span class="'+(p.price_stale?'negative':'muted')+'">'+esc(dt(p.price_ts))+(p.price_kind==='minute_close'?' · свеча':'')+(p.price_stale?' · устарела':'')+'</span>'
+ ]));
 }

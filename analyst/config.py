@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+import os
 from pathlib import Path
 from .universe import FALLBACK20
 
@@ -111,4 +112,6 @@ def version(c: dict) -> str:
     return hashlib.sha256(json.dumps(validate(c), sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 def read_config(path=None):
+    seed=Path(__file__).resolve().parent.parent/"configs"/"production.json"
+    if path is None and os.getenv("RENDER") and seed.exists():path=seed
     return validate(json.loads(Path(path).read_text()) if path else DEFAULT)

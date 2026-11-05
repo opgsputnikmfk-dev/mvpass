@@ -42,7 +42,7 @@ def make_server(engine,host="127.0.0.1",port=8765):
         def do_GET(self):
             if not self.valid_host():return self.json(403,{"error":"Invalid host"})
             u=urllib.parse.urlsplit(self.path);path=u.path;q=urllib.parse.parse_qs(u.query)
-            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"4.3.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
+            if path in ("/health", "/healthz"):return self.json(200,{"process":"ok","version":"4.4.0","scanner":engine.status,"updated_at":engine.updated_at,"mode":"paper","selected_symbols":len(engine.config["symbols"]),"universe_verified":engine.universe.get("verified",False),"data_source":engine.config["market"],"analyzed_symbols":len(engine.last_analysis)})
             if path in ("/style.css","/app.js"):
                 return self.respond(200,(static/path[1:]).read_bytes(),"text/css" if path.endswith("css") else "text/javascript")
             if not self.authenticated():

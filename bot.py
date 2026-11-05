@@ -97,6 +97,7 @@ def main():
     server=make_server(engine,args.host,args.port)
     threads=[]
     if not demo:threads.append(threading.Thread(target=engine.run,daemon=True,name="scanner"))
+    if not demo:threads.append(threading.Thread(target=engine.quote_loop,daemon=True,name="position-quotes"))
     if args.telegram:
         from analyst.telegram import Telegram
         telegram=Telegram(engine);threads.append(threading.Thread(target=telegram.run,daemon=True,name="telegram"))
