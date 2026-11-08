@@ -31,7 +31,8 @@ def price_chart(candles,candidate=None,synthetic=False,source="PAPER"):
             ax.add_patch(Rectangle((i-.32,min(r.open,r.close)),.64,max(abs(r.close-r.open),r.close*.00001),facecolor=color))
             vol.bar(i,r.volume,color=color,width=.64)
         if candidate:
-            for key,col,label in [("reference","#b2b8bb","Entry / TVH"),("stop","#ff7b85","SL / Stop"),("target","#8aefbb","TP / Target")]:
+            for key,col,label in [("reference","#b2b8bb","Entry / TVH"),("stop","#ff7b85","SL / Stop"),("target1","#62cadc","TP1"),("target","#8aefbb","TP2" if candidate.get("target1") is not None else "TP")]:
+                if candidate.get(key) is None:continue
                 ax.axhline(candidate[key],color=col,linewidth=1,label=f"{label} {candidate[key]:.7g}")
             if candidate.get("live_position"):
                 price=candidate.get("current_price")

@@ -15,6 +15,16 @@ def variants(config):
     for k in ("ema","atr","fibonacci","room"):fib["filters"][k]="on"
     return {"active":copy.deepcopy(config),"baseline":base,"fibonacci":fib}
 
+
+def chart_history(curve):
+    """Keep recent detail and thin only the older portion of the dashboard payload."""
+    if not curve:return []
+    cutoff=curve[-1][0]-31*86400000
+    from bisect import bisect_left
+    split=bisect_left(curve,[cutoff])
+    stride=max(1,(split+999)//1000)
+    return curve[:split:stride]+curve[split:]
+
 class Engine:
     def __init__(self,store,config=None,demo=False):
         self.store=store;self.lock=threading.RLock();self.stop=threading.Event();self.demo=demo
@@ -146,7 +156,7 @@ class Engine:
                     "universe":copy.deepcopy(self.universe),
                     "status":self.status,"updated_at":self.updated_at,"generation":self.generation,"config":copy.deepcopy(self.config),
                     "market":copy.deepcopy(self.market),"accounts":{k:{"stats":a.stats(),"positions":[position_view(p,a,self.live_prices,now) for p in a.positions.values()],
-                    "trades":a.closed[-100:],"curve":a.equity_curve[-2000:],"rejections":a.rejections[-20:]} for k,a in self.accounts.items()},
+                    "trades":a.closed[-100:],"curve":chart_history(a.equity_curve),"rejections":a.rejections[-20:]} for k,a in self.accounts.items()},
                     "candidates":self.store.recent_candidates(40),"logs":self.store.logs()}
 
     def cycle(self):

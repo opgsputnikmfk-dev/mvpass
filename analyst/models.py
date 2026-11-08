@@ -59,6 +59,13 @@ class Position:
     reason: str = "OPEN"
     last_bar: int = 0
     setup: str = ""
+    target1: Optional[float] = None
+    tp1_qty: float = 0.0
+    tp1_exit_ts: Optional[int] = None
+    tp1_exit_price: Optional[float] = None
+    partial_gross: float = 0.0
+    partial_fee: float = 0.0
+    partial_risk: float = 0.0
 
     def to_dict(self):
         return asdict(self)

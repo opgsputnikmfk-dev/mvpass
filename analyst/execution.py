@@ -97,16 +97,35 @@ class Ledger:
             return "Безопасный размер позиции меньше минимального объёма биржи"
         fee=qty*entry*r["fee_rate"];self.cash-=fee
         p=Position(c.id,c.id,c.symbol,c.side,int(ts),entry,stop,stop,target,qty,qty*unit_loss,fee,self.version,copy.deepcopy(r),last_bar=ts-MINUTE,setup=c.setup)
+        midpoint=entry+(target-entry)/2
+        tp1=floor_step(midpoint,tick) if c.side==1 else -floor_step(-midpoint,tick)
+        half=floor_step(qty/2,step)
+        if (c.side*(tp1-entry)>0 and c.side*(target-tp1)>0
+                and min(half,qty-half)>=meta.get("min_qty",step)
+                and min(half,qty-half)*min(tp1,target,stop)>=meta.get("min_notional",5)):
+            p.target1,p.tp1_qty=tp1,half
         self.positions[p.id]=p;self.last_entry[c.symbol]=int(ts)
         return None
+
+    def take_partial(self,p,ts):
+        fill=p.target1*(1-p.side*p.rules["slippage_bps"]/10000)
+        p.partial_gross=p.side*(fill-p.entry)*p.tp1_qty
+        p.partial_fee=fill*p.tp1_qty*p.rules["fee_rate"]
+        p.partial_risk=p.planned_risk*(p.tp1_qty/p.qty)
+        p.tp1_exit_ts=int(ts)
+        p.tp1_exit_price=fill
+        p.qty-=p.tp1_qty
+        p.planned_risk-=p.partial_risk
+        self.cash+=p.partial_gross-p.partial_fee
 
     def close(self,p,price,ts,reason):
         slip=p.rules["slippage_bps"]/10000
         fill=price*(1-p.side*slip);fee=fill*p.qty*p.rules["fee_rate"]
         gross=p.side*(fill-p.entry)*p.qty
         self.cash+=gross-fee
-        p.exit_ts=int(ts);p.exit_price=fill;p.net_pnl=gross-p.entry_fee-fee-p.funding_paid;p.reason=reason
-        record=asdict(p);record["net_r"]=p.net_pnl/p.planned_risk;record["fees"]=p.entry_fee+fee
+        p.exit_ts=int(ts);p.exit_price=fill;p.net_pnl=gross+p.partial_gross-p.entry_fee-fee-p.partial_fee-p.funding_paid;p.reason=reason
+        record=asdict(p);record["net_r"]=p.net_pnl/(p.planned_risk+p.partial_risk);record["fees"]=p.entry_fee+fee+p.partial_fee
+        if p.tp1_exit_ts is not None:record["qty"]+=p.tp1_qty
         self.closed.append(record);del self.positions[p.id]
         return record
 
@@ -133,12 +152,16 @@ class Ledger:
             b=bars[p.symbol];o,hi,lo,cl=map(float,(b["open"],b["high"],b["low"],b["close"]))
             stophit=lo<=p.stop if p.side==1 else hi>=p.stop
             targethit=hi>=p.target if p.side==1 else lo<=p.target
-            if stophit and targethit:p.ambiguous_bars+=1
+            firsthit=(p.target1 is not None and p.tp1_exit_ts is None
+                      and (hi>=p.target1 if p.side==1 else lo<=p.target1))
+            if stophit and (targethit or firsthit):p.ambiguous_bars+=1
             if p.side*(o-p.stop)<=0: notifications.append(self.close(p,o,ts,"SL_GAP"))
             elif stophit: notifications.append(self.close(p,p.stop,ts+MINUTE-1,"SL"))
-            elif targethit: notifications.append(self.close(p,p.target,ts+MINUTE-1,"TP"))
-            elif ts+MINUTE>=p.entry_ts+p.rules["max_hold_minutes"]*MINUTE: notifications.append(self.close(p,cl,ts+MINUTE-1,"TIMEOUT"))
             else:
+                if firsthit:self.take_partial(p,ts+MINUTE-1)
+                if targethit:
+                    notifications.append(self.close(p,p.target,ts+MINUTE-1,"TP2" if p.target1 is not None else "TP"))
+                    return
                 p.last_bar=int(ts)
                 if p.rules["trailing_atr"]>0:
                     # ATR fixed at entry candidate, trailing activated after +1R.

@@ -77,7 +77,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertAlmostEqual(a.closed[-1]["net_r"],-1,places=10)
     def test_target_positive_after_costs(self):
         a,p=self.enter();a.step(3*MINUTE,{"BTCUSDT":bar(h=105,l=99,c=104)},META)
-        self.assertEqual(a.closed[-1]["reason"],"TP");self.assertGreater(a.closed[-1]["net_pnl"],0);self.assertLess(a.closed[-1]["net_r"],2)
+        self.assertEqual(a.closed[-1]["reason"],"TP2");self.assertGreater(a.closed[-1]["net_pnl"],0);self.assertLess(a.closed[-1]["net_r"],2)
     def test_ambiguous_stop_first(self):
         a,p=self.enter();a.step(3*MINUTE,{"BTCUSDT":bar(h=110,l=90)},META)
         self.assertEqual(a.closed[-1]["reason"],"SL");self.assertEqual(a.closed[-1]["ambiguous_bars"],1)
@@ -115,10 +115,26 @@ class ExecutionTests(unittest.TestCase):
         a.propose(candidate(symbol="ETHUSDT",cid="eth",ts=2*MINUTE))
         a.step(3*MINUTE,{"BTCUSDT":bar(h=105,l=99,c=104),"ETHUSDT":bar()},META)
         self.assertFalse(a.positions);self.assertTrue(any("Лимит позиций" in r["reason"] for r in a.rejections))
-    def test_timeout(self):
+    def test_position_stays_open_after_old_timeout(self):
         c=config();c["risk"]["max_hold_minutes"]=5;a,p=self.enter(cfg=c)
-        for t in range(3,7):a.step(t*MINUTE,{"BTCUSDT":bar()},META)
-        self.assertEqual(a.closed[-1]["reason"],"TIMEOUT")
+        for t in range(3,12):a.step(t*MINUTE,{"BTCUSDT":bar()},META)
+        self.assertIn(p.id,a.positions);self.assertFalse(a.closed)
+    def test_tp1_then_stop_survives_restart_and_reconciles_cash(self):
+        for side in (1,-1):
+            a,p=self.enter(side);original_qty=p.qty
+            mid=(p.target1+p.target)/2
+            a.step(3*MINUTE,{"BTCUSDT":bar(h=max(100,mid),l=min(100,mid),c=mid)},META)
+            self.assertFalse(a.closed)
+            self.assertAlmostEqual(p.qty+p.tp1_qty,original_qty)
+            self.assertAlmostEqual(p.tp1_qty/original_qty,.5,places=2)
+            a=Ledger(a.config,a.name,json.loads(json.dumps(a.dump())))
+            p=a.positions[p.id]
+            a.step(4*MINUTE,{"BTCUSDT":bar(h=max(mid,p.stop),l=min(mid,p.stop),o=mid,c=p.stop)},META)
+            t=a.closed[-1]
+            self.assertEqual(t["reason"],"SL")
+            self.assertEqual(t["tp1_exit_ts"],4*MINUTE-1)
+            self.assertAlmostEqual(a.cash,10000+t["net_pnl"])
+            self.assertAlmostEqual(t["qty"],original_qty)
     def test_restart_same_ledger_state(self):
         a,p=self.enter();b=Ledger(a.config,a.name,json.loads(json.dumps(a.dump())))
         for l in (a,b):l.step(3*MINUTE,{"BTCUSDT":bar(h=105,l=99,c=104)},META)

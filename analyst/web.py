@@ -73,7 +73,7 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
                         p=position_view(position,account,engine.live_prices,int(time.time()*1000))
                         candidate=engine.store.candidate(position.candidate_id)
                     if path=="/api/position":return self.json(200,{"position":p,"candidate":candidate,"account":key})
-                    chart={**(candidate or {}),"symbol":p["symbol"],"side":p["side"],"setup":p["setup"],"reference":p["entry"],"stop":p["stop"],"target":p["target"],"levels":(candidate or {}).get("levels",{}),"entry_ts":p["entry_ts"],"current_price":p["current_price"],"live_position":True}
+                    chart={**(candidate or {}),"symbol":p["symbol"],"side":p["side"],"setup":p["setup"],"reference":p["entry"],"stop":p["stop"],"target":p["target"],"target1":p["target1"],"levels":(candidate or {}).get("levels",{}),"entry_ts":p["entry_ts"],"current_price":p["current_price"],"live_position":True}
                     return self.respond(200,price_chart(engine.store.candles(p["symbol"]),chart,engine.demo,source="Binance Spot reference" if engine.config["exchange"]=="binance" else "Bybit perpetual"),"image/png")
                 if path=="/api/chart":
                     cid=q.get("candidate",[None])[0];c=engine.store.candidate(cid) if cid else None
@@ -90,7 +90,7 @@ def make_server(engine,host="127.0.0.1",port=8765,profiles=None,auth_records=Non
                         trades=list(a.closed)
                     out=io.StringIO();writer=csv.writer(out)
                     writer.writerow(["Монета","Направление","Вход UTC","Выход UTC","Цена входа","Стоп","Цель","Итог USDT","Результат R","Комиссии","Funding","Причина","Версия"])
-                    labels={"SL":"Стоп","SL_GAP":"Стоп с разрывом","TP":"Цель","TIMEOUT":"Лимит времени","END_OF_TEST":"Конец теста"}
+                    labels={"SL":"Стоп","SL_GAP":"Стоп с разрывом","TP":"Цель","TP2":"Вторая цель","TIMEOUT":"Лимит времени","END_OF_TEST":"Конец теста"}
                     for t in trades:
                         stamp=lambda ts:time.strftime("%Y-%m-%d %H:%M:%S",time.gmtime(ts/1000))
                         writer.writerow([t["symbol"],"LONG" if t["side"]==1 else "SHORT",stamp(t["entry_ts"]),stamp(t["exit_ts"]),f'{t["entry"]:.8g}',f'{t["initial_stop"]:.8g}',f'{t["target"]:.8g}',round(t["net_pnl"],2),round(t["net_r"],3),round(t["fees"],4),round(t["funding_paid"],4),labels.get(t["reason"],t["reason"]),t["config_version"]])

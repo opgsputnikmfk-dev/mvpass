@@ -22,6 +22,6 @@ def position_view(p,account,quotes,now_ms):
         fill=price*(1-p.side*p.rules["slippage_bps"]/10000)
         gross=p.side*(price-p.entry)*p.qty
         exit_fee=fill*p.qty*p.rules["fee_rate"]
-        net=p.side*(fill-p.entry)*p.qty-p.entry_fee-exit_fee-p.funding_paid
-        row.update(unrealized_gross=gross,estimated_pnl=net,estimated_pnl_pct=100*net/(p.entry*p.qty))
+        net=p.side*(fill-p.entry)*p.qty+p.partial_gross-p.entry_fee-exit_fee-p.partial_fee-p.funding_paid
+        row.update(unrealized_gross=gross,estimated_pnl=net,estimated_pnl_pct=100*net/(p.entry*(p.qty+(p.tp1_qty if p.tp1_exit_ts is not None else 0))))
     return row
