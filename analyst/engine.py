@@ -62,6 +62,24 @@ class Engine:
         if c!=self.config:self.update_config(c)
         self.store.set(marker,True)
 
+    def upgrade_directional_risk(self):
+        """Tighten new entries in the current series while retaining its ledger."""
+        marker = "directional_risk_v1"
+        with self.lock:
+            if self.store.get(marker):
+                return
+            config = copy.deepcopy(self.config)
+            risk = config["risk"]
+            risk["max_side_risk_pct"] = min(risk["max_side_risk_pct"], .0025)
+            risk["risk_pct"] = min(risk["risk_pct"], risk["max_side_risk_pct"])
+            self.config = validate(config)
+            for name, variant in variants(self.config).items():
+                ledger = self.accounts[self.generation + ":" + name]
+                ledger.config = variant
+                ledger.version = version(variant)
+            self.store.save_config_and_state(self.config, self.dump())
+            self.store.set(marker, True)
+
     def occupied_symbols(self):
         # Old settings may still have open positions after a filter change.
         return {p.symbol for key,a in self.accounts.items() if key.endswith(":active") for p in a.positions.values()}

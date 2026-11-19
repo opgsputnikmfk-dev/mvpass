@@ -107,6 +107,8 @@ def main():
         profiles[username]=Engine(Store(userroot/"paper.sqlite",market_store=store),copy.deepcopy(profile_seeds.get(username,engine.config)),demo)
     for profile in profiles.values():
         profile.upgrade_position_limit();profile.upgrade_risk_allocation()
+        if not demo:
+            profile.upgrade_directional_risk()
     runner=EngineProfiles(profiles)
     server=make_server(engine,args.host,args.port,profiles=profiles,auth_records=records)
     threads=[]

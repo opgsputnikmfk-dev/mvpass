@@ -51,3 +51,24 @@ class RiskSlotTests(unittest.TestCase):
             self.assertEqual(e.config['risk']['max_open_risk_pct'],.003);self.assertEqual(e.config['risk']['risk_pct'],.0002)
             c=copy.deepcopy(e.config);c['risk']['risk_pct']=.0001;e.update_config(c);e.upgrade_risk_allocation()
             self.assertEqual(e.config['risk']['risk_pct'],.0001);store.db.close()
+
+    def test_directional_risk_upgrade_keeps_current_series_and_existing_position(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(Path(root) / "paper.sqlite")
+            engine = Engine(store, config())
+            generation = engine.generation
+            ledger = engine.accounts[generation + ":active"]
+            meta = dict(tick_size=.01, qty_step=.001, min_qty=.001, min_notional=1)
+            self.assertIsNone(ledger._open(candidate(), bar(), meta, 2 * MINUTE))
+            before = ledger.dump()["positions"]
+            ledger.equity_curve.append([2 * MINUTE, ledger.equity()])
+
+            engine.upgrade_directional_risk()
+            restored = Engine(store)
+            current = restored.accounts[generation + ":active"]
+            self.assertEqual(restored.generation, generation)
+            self.assertEqual(current.dump()["positions"], before)
+            self.assertEqual(current.equity_curve, ledger.equity_curve)
+            self.assertEqual(current.config["risk"]["max_side_risk_pct"], .0025)
+            self.assertEqual(current.config["risk"]["max_positions"], 10)
+            store.db.close()
